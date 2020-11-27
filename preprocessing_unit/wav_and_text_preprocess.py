@@ -73,22 +73,23 @@ def data_dict(file_infos):
 def wav_list_from_data_dict_result(data_dict_result,directory = './preprocessed',output_file_name='prep_data'):
     file_root_name = os.path.join(directory,output_file_name)
     list_tmp = []
-    len_max = 0
-    sr_max = 0
-    '''
-    print("Get the longest text length")
+    wav_max = 0
+    txt_max = 0
+    print("Get the longest wav and text length")
     for speaker in tqdm(data_dict_result):
         for speaker_utterances in speaker:
             wave_file = speaker_utterances[0]
+            sentence = speaker_utterances[1]
             if os.path.isfile(wave_file):
                 wav, sr = librosa.load(wave_file,sr=None)
-                if len(wav) > len_max:
-                    len_max = len(wav)
-                if sr > sr_max:
-                    sr_max = sr
-    '''
+                if len(wav) > wav_max:
+                    wav_max = len(wav)
+                if len(sentence) > txt_max:
+                    txt_max = len(sentence)
+
     counter = 0
     sp_num = 0
+    list_datapairs = []
     print("Obtain the wav vector & text pairs")
     for speaker in tqdm(data_dict_result):
         print("Speaker number: ", sp_num)
@@ -99,26 +100,37 @@ def wav_list_from_data_dict_result(data_dict_result,directory = './preprocessed'
             txt_filename = file_root_name+"_txt"+str(counter)+".npz"
             wav_file = speaker_utterances[0]
             sentence = speaker_utterances[1]
-            sentence = sentence.replace("“","\"").replace("”","\"").replace("/"," ")
-            sentence = sentence.replace("’","'").replace("‘","'").replace("`","'")
-            sentence = sentence.replace("@","*").replace("#","*").replace(":","*")
-            sentence = sentence.replace("+","*").replace("-","*").replace("=","*")
-            sentence = sentence.replace("~","*").replace("&","*").replace("%","*")
-            sentence = sentence.replace("[","(").replace("{","(").replace("#","*")
-            sentence = sentence.replace("]",")").replace("}",")").replace("_","*")
             if os.path.isfile(wav_file):
                 wav, sr = librosa.load(wav_file,sr=None)
+                if len(wav) < wav_max:
+                    wav = wav.tolist()
+                    diff_length = wav_max - len(wav)
+                    wav = wav + [0]*diff_length
+                    wav = np.array(wav)
+                #while len(sentence) < txt_max:
+                #    sentence = sentence + '*'
+                
                 # obtain the MEL and save the array to the respective file
                 mel = librosa.feature.melspectrogram(y=wav, sr=sr)
-                np.savez(wav_filename, mel)
+                mel_db = librosa.power_to_db(mel, ref=np.max) # to db scale
+                if not os.path.isdir(directory):
+                    os.mkdir(directory)
+                np.savez(wav_filename, mel_db)
                 # encode the sentence
                 if counter == 0:
-                    encoded_sentence, hangul_dict = sentence2vec(sentence)
+                    encoded_sentence, hangul_dict = sentence2vec(sentence,vec=True)
                 else:
-                    encoded_sentence, hangul_dict = sentence2vec(sentence, hangul_dict=hangul_dict)
+                    encoded_sentence, hangul_dict = sentence2vec(sentence, hangul_dict=hangul_dict,vec=True)
 
                 np.savez(txt_filename, encoded_sentence)
                 counter = counter + 1 # update the counter
+
+                list_datapairs.append((txt_filename, wav_filename))
+    f = open('filelist_pairs.csv','w+')
+    for pair in list_datapairs:
+        to_write = pair[0]+','+pair[1]+'\n'
+        f.write(to_write)
+    f.close()
 
 # ========================================
 #

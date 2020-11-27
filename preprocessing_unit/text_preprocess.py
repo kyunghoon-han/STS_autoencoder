@@ -46,16 +46,20 @@ def sentence_to_decomposition(a_sentence):
         output = output + Hangul_decomposition(i)
     return output
 
-def encoder_generator():
+def encoder_generator(vec=False):
     extra_letters = set(" '!().,\"*?'")
     letters = list(extra_letters.union(extended_hanguls))
     random.shuffle(letters)
     len_vectors = len(letters)
     hangul_dict = {}
-    for i in range(len_vectors):
-        tmp_zeros = [0]*len_vectors
-        tmp_zeros[i] = 1
-        hangul_dict[letters[i]] = tmp_zeros
+    if vec:
+        for i in range(len_vectors):
+            tmp_zeros = [0]*len_vectors
+            tmp_zeros[i] = 1
+            hangul_dict[letters[i]] = tmp_zeros
+    else:
+        for i in range(len_vectors):
+            hangul_dict[letters[i]] = i
     
     a_file = open("encoded_hangul.pkl","wb")
     pickle.dump(hangul_dict,a_file)
@@ -63,7 +67,8 @@ def encoder_generator():
 
     return hangul_dict
 
-def sentence2vec(a_sentence, hangul_dict = {},filename=".encoded_hangul.pkl", from_file=False):
+def sentence2vec(a_sentence, hangul_dict = {},filename=".encoded_hangul.pkl", 
+                from_file=False, vec=False):
     a_sentence = a_sentence.replace("“","\"").replace("”","\"").replace("/"," ")
     a_sentence = a_sentence.replace("’","'").replace("‘","'").replace("`","'")
     a_sentence = a_sentence.replace("@","*").replace("#","*").replace(":","*")
@@ -78,7 +83,10 @@ def sentence2vec(a_sentence, hangul_dict = {},filename=".encoded_hangul.pkl", fr
         with open(filename,'rb') as f:
             hangul_dict = pkl.load(f)
     else:
-        hangul_dict = encoder_generator()
+        if not vec:
+            hangul_dict = encoder_generator()
+        else:
+            hangul_dict = encoder_generator(vec=True)
     # now a for loop
     output = []
     sentence_decom = sentence_to_decomposition(a_sentence)
