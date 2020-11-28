@@ -52,9 +52,15 @@ def read_encoded_data(path,filename_pair):
 #  Loss, Optimizer and Scheduler
 #
 # ======================================
-def Loss(x,y):
-    funct = nn.BCELoss()
-    return funct(x,y)
+def LossMSE(x,y):
+    loss = nn.MSELoss()
+    return loss(x,y)
+
+def LossBCEMSE(x,y):
+    funct1 = nn.BCELoss()
+    funct2 = nn.MSELoss()
+    return funct2(x,y)
+
 
 def Opt(model,learning_rate=0.01):
     return optim.Adam(model.parameters(),lr=learning_rate)
@@ -228,8 +234,38 @@ class AttentionDecoder(nn.Module):
 
 # ======================================
 #
-#   Score function 
+#   Decoder 
 #
 # ======================================
+class Decoder(nn.Module):
+    def __init__(self,output_size,device,batch_size):
+        super(Decoder,self).__init__()
+        self.depth = 4
+        self.bn = batch_size
+        # convolution layers
+        conv1 = nn.Conv2d(1,4,3,padding=1,stride=1)
+        conv2 = nn.Conv2d(4,8,3,padding=1,stride=1)
+        conv3 = nn.Conv2d(8,16,3,padding=1,stride=1)
+        conv4 = nn.Conv2d(16,32,3,padding=1,stride=1)
+        self.list_convs = [conv1, conv2, conv3, conv4]
+        # batch normalizations
+        bn1 = nn.BatchNorm2d(4)
+        bn2 = nn.BatchNorm2d(8)
+        bn3 = nn.BatchNorm2d(16)
+        bn4 = nn.BatchNorm2d(32)
+        self.list_bns = [bn1, bn2, bn3, bn4]
 
+        self.fs = nn.Linear(32*62*2,output_size).to(device)
+        self.device=device
 
+    def forward(self,x):
+        x = x.reshape(self.bn,1,-1,62)
+        # pass the x to the convolution layers
+        for i in range(self.depth):
+            funct1 = self.list_convs[i].to(self.device)
+            funct2 = self.list_bns[i].to(self.device)
+            x = funct1(x)
+            x = funct2(x)
+        x = x.reshape(2,64,32*62*2)
+        x = self.fs(x)
+        return x

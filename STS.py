@@ -1,4 +1,4 @@
-from utils import Encoder_GRU, AttentionDecoder, Loss, Opt 
+from utils import Encoder_GRU, AttentionDecoder, Decoder, LossMSE,LossBCEMSE, Opt, Schedule 
 import numpy as np
 import matplotlib.pyplot as plt
 import librosa, torch, os, csv, pickle, shutil
@@ -113,10 +113,28 @@ def trainer():
                                     hidden_size=input_size,
                                     device=device) # call the models
                 opt_1 = Opt(encoder) # optimizers
+                #sch_1 = Schedule(opt_1)
             # optimizer initialization and encoder definition
             opt_1.zero_grad()
             encoded_wav, hidden = encoder(wav_source)
-            
+
+            if step == 0:
+                output_size = wav_source.size()[-1]
+                decoder = Decoder(output_size,device=device,batch_size=batch_size)
+                opt_d = Opt(decoder)
+                #sch_d = Schedule(opt_d)
+            opt_d.zero_grad()
+            decoded_wav = decoder(encoded_wav)
+
+            loss_1 = LossMSE(decoded_wav,wav_source.to(device))
+            loss_1.backward()
+            opt_1.step()
+            opt_d.step()
+
+            # now to attention (STT problem)
+            opt_1.zero_grad()
+            encoded_wav,hidden = encoder(wav_source)
+
             if step == 0:
                 input_size = encoded_wav.size()[-1]
                 hidden_size= hidden.size()[-1]
@@ -125,24 +143,32 @@ def trainer():
                                              vocab_size=txt_target.size()[-1],
                                              device=device)
                 opt_2 = Opt(attention)
+                #sch_2 = Schedule(opt_2)
+            opt_2.zero_grad()
             att_output, att_hidden, normalized_weights = attention(
                                     hidden.to(device),
                                     encoded_wav.to(device))
 
-            loss = Loss(att_output,txt_target)
+            loss_2 = LossBCEMSE(att_output,txt_target)
             # backprogation
-            loss.backward()
+            loss_2.backward()
             opt_2.step()
             opt_1.step()
 
-            if step % 1000 == 0:
+            loss = loss_1 + loss_2
+            if step % 1000 == 1:
                 string_out = "At step %i, the loss is %.2f" % (step, loss)
                 print(string_out)
+                #sch_1.step()
+                #sch_d.step()
+                #sch_2.step()
+        
             
             if step % 100 == 0:
                 string_out = "%i , %.2f\n" % (step, loss)
                 f.write(string_out)
             step += 1
+
         # now to test the model...
         test_loss = 0.0
         counter = 0.0
@@ -161,22 +187,32 @@ def trainer():
             # just to make sure the the input values are floats
             txt_target = txt_target.float()
             wav_source = wav_source.float()
+            decoded_wav = decoder(encoded_wav)
+            loss_1 = LossMSE(decoded_wav,wav_source.to(device))
             encoded_wav, hidden = encoder(wav_source)
             result_att, _,_ = attention(hidden,encoded_wav)
-            loss = Loss(result_att,txt_target)
-            test_loss += loss
+            loss_2 = LossBCEMSE(result_att,txt_target)
+            test_loss = test_loss + loss_1+loss_2
+            counter += 1
         test_loss = test_loss / counter
         print("The number of discarded data is: ",num_discarded)
         print("The validation loss is : ", test_loss)
+        #sch_1.step()
+        #sch_d.step()
+        #sch_2.step()
         # to save the model...
         if e%10 == 0:
-            if not os.path.exist("./models"):
+            if not os.path.exists("./models"):
                 os.mkdir("./models")
             path = "./models/epoch_%i.pt" %(e)
             torch.save({
                 'epoch' : e,
                 'encoder_state' : encoder.state_dict(),
-                'optimizer_state': opt.state_dict(),
+                'decoder_state' : decoder.state_dict(),
+                'attention_state': attention.state_dict(),
+                #'optimizer_state_encoder': opt_1.state_dict(),
+                #'optimizer_state_attention': opt_2.state_dict(),
+                #'optimizer_state_decoder': opt_d.state_dict(),
                 'loss' : loss}, path)
     f.close()
 
