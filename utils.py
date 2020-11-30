@@ -54,16 +54,19 @@ def read_encoded_data(path,filename_pair):
 # ======================================
 def LossMSE(x,y):
     loss = nn.MSELoss()
-    return loss(x,y)
+    return torch.abs(torch.log(loss(x,y)))
 
 def LossKL(x,y):
     loss = nn.KLDivLoss()
-    return 100*loss(x,y)
+    val = loss(x,y)*loss(x,y)
+    return val
 
 def LossBCEMSE(x,y):
     funct1 = nn.BCELoss()
     funct2 = nn.MSELoss()
-    return funct2(x,y)
+    mse = torch.log(funct2(x,y))
+    mse = torch.abs(mse)
+    return funct1(x,y) + mse
 
 
 def Opt(model,learning_rate=0.01):

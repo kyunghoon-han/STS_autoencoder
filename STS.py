@@ -136,7 +136,7 @@ def trainer():
                                     hidden.to(device),
                                     encoded_wav.to(device))
 
-            loss_1 = LossBCEMSE(att_output,txt_target)
+            loss_1 = LossBCEMSE(att_output,txt_target) + LossKL(att_output,txt_target)
             # backprogation
             loss_1.backward()
             opt_2.step()
@@ -170,6 +170,7 @@ def trainer():
                 string_out = "At step %i, the loss is %.2f" % (step, loss)
                 print(string_out)
                 string_out = "with the STT loss %.2f, STS loss %.2f" % (loss_1, loss_2)
+                print(string_out)
                 #sch_1.step()
                 #sch_d.step()
                 #sch_2.step()
@@ -201,15 +202,16 @@ def trainer():
             #STT
             encoded_wav, hidden = encoder(wav_source)
             result_att, _,_ = attention(hidden,encoded_wav)
-            loss_2 = LossBCEMSE(result_att,txt_target)
+            loss_2 = LossBCEMSE(result_att,txt_target)+LossKL(result_att,txt_target)
             # STS
             encoded_wav, hidden = encoder(wav_source)
             result_att, _,_ = attention(hidden,encoded_wav)
             decoded_wav = decoder(result_att)
-            loss_1 = LossKL(decoded_wav,wav_source.to(device)) 
+            loss_1 = LossKL(decoded_wav,wav_source.to(device))+LossMSE(decoded_wav,wav_source.to(device)) 
 
             test_loss = test_loss + loss_1+loss_2
-            counter += 1
+            counter += 1.0
+        test_loss = test_loss
         test_loss = test_loss / counter
         print("The number of discarded data is: ",num_discarded)
         print("The validation loss is : ", test_loss)
