@@ -56,6 +56,10 @@ def LossMSE(x,y):
     loss = nn.MSELoss()
     return loss(x,y)
 
+def LossKL(x,y):
+    loss = nn.KLDivLoss()
+    return 100*loss(x,y)
+
 def LossBCEMSE(x,y):
     funct1 = nn.BCELoss()
     funct2 = nn.MSELoss()
@@ -255,7 +259,8 @@ class Decoder(nn.Module):
         bn4 = nn.BatchNorm2d(32)
         self.list_bns = [bn1, bn2, bn3, bn4]
 
-        self.fs = nn.Linear(32*62*2,output_size).to(device)
+        self.rels = nn.LeakyReLU(0.3)
+        self.fs = nn.Linear(1984,output_size).to(device)
         self.device=device
 
     def forward(self,x):
@@ -266,6 +271,6 @@ class Decoder(nn.Module):
             funct2 = self.list_bns[i].to(self.device)
             x = funct1(x)
             x = funct2(x)
-        x = x.reshape(2,64,32*62*2)
-        x = self.fs(x)
+        x = x.reshape(2,64,-1)
+        x = self.rels(self.fs(x)) * (-1)
         return x

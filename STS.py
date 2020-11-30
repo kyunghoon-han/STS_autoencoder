@@ -1,4 +1,4 @@
-from utils import Encoder_GRU, AttentionDecoder, Decoder, LossMSE,LossBCEMSE, Opt, Schedule 
+from utils import Encoder_GRU, AttentionDecoder, Decoder,LossKL, LossMSE,LossBCEMSE, Opt, Schedule 
 import numpy as np
 import matplotlib.pyplot as plt
 import librosa, torch, os, csv, pickle, shutil
@@ -85,7 +85,7 @@ def trainer():
     f = open(log_path,"w+")
     step = 0
     num_discarded = 0
-    f.write("step, loss \n")
+    f.write("step, loss, STT_loss, STS_loss \n")
     while e < epochs :
         e += 1
         num_discarded = 0
@@ -106,7 +106,8 @@ def trainer():
                 step -= 1
                 num_discarded += 1
                 continue
-            
+
+            # an STT module
             if step == 0 :
                 input_size = wav_source.size()[-1]
                 encoder = Encoder_GRU(input_size=input_size,
@@ -118,20 +119,6 @@ def trainer():
             opt_1.zero_grad()
             encoded_wav, hidden = encoder(wav_source)
 
-            if step == 0:
-                output_size = wav_source.size()[-1]
-                decoder = Decoder(output_size,device=device,batch_size=batch_size)
-                opt_d = Opt(decoder)
-                #sch_d = Schedule(opt_d)
-            opt_d.zero_grad()
-            decoded_wav = decoder(encoded_wav)
-
-            loss_1 = LossMSE(decoded_wav,wav_source.to(device))
-            loss_1.backward()
-            opt_1.step()
-            opt_d.step()
-
-            # now to attention (STT problem)
             opt_1.zero_grad()
             encoded_wav,hidden = encoder(wav_source)
 
@@ -149,23 +136,47 @@ def trainer():
                                     hidden.to(device),
                                     encoded_wav.to(device))
 
-            loss_2 = LossBCEMSE(att_output,txt_target)
+            loss_1 = LossBCEMSE(att_output,txt_target)
             # backprogation
-            loss_2.backward()
+            loss_1.backward()
             opt_2.step()
             opt_1.step()
+
+            # Now to the STS model
+
+            if step == 0:
+                output_size = wav_source.size()[-1]
+                decoder = Decoder(output_size,device=device,batch_size=batch_size)
+                opt_d = Opt(decoder)
+                #sch_d = Schedule(opt_d)
+            opt_d.zero_grad()
+            opt_1.zero_grad()
+            opt_2.zero_grad()
+            
+            encoded_wav,hidden = encoder(wav_source)
+            att_output, att_hidden, normalized_weights = attention(
+                                    hidden.to(device),
+                                    encoded_wav.to(device))
+            decoded_wav = decoder(att_output)
+
+            loss_2 = LossKL(decoded_wav,wav_source.to(device)) + LossMSE(decoded_wav,wav_source.to(device))
+            loss_2.backward()
+            opt_1.step()
+            opt_2.step()
+            opt_d.step()
 
             loss = loss_1 + loss_2
             if step % 1000 == 1:
                 string_out = "At step %i, the loss is %.2f" % (step, loss)
                 print(string_out)
+                string_out = "with the STT loss %.2f, STS loss %.2f" % (loss_1, loss_2)
                 #sch_1.step()
                 #sch_d.step()
                 #sch_2.step()
         
             
             if step % 100 == 0:
-                string_out = "%i , %.2f\n" % (step, loss)
+                string_out = "%i , %.2f, %.2f, %.2f \n" % (step, loss, loss_1,loss_2)
                 f.write(string_out)
             step += 1
 
@@ -187,11 +198,16 @@ def trainer():
             # just to make sure the the input values are floats
             txt_target = txt_target.float()
             wav_source = wav_source.float()
-            decoded_wav = decoder(encoded_wav)
-            loss_1 = LossMSE(decoded_wav,wav_source.to(device))
+            #STT
             encoded_wav, hidden = encoder(wav_source)
             result_att, _,_ = attention(hidden,encoded_wav)
             loss_2 = LossBCEMSE(result_att,txt_target)
+            # STS
+            encoded_wav, hidden = encoder(wav_source)
+            result_att, _,_ = attention(hidden,encoded_wav)
+            decoded_wav = decoder(result_att)
+            loss_1 = LossKL(decoded_wav,wav_source.to(device)) 
+
             test_loss = test_loss + loss_1+loss_2
             counter += 1
         test_loss = test_loss / counter
