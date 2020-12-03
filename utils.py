@@ -52,28 +52,33 @@ def read_encoded_data(path,filename_pair):
 #  Loss, Optimizer and Scheduler
 #
 # ======================================
-def LossMSE(x,y):
-    loss = nn.MSELoss()
-    return torch.abs(torch.log(loss(x,y)))
+def LossMSE(x,y,device,switch=False):
+    if not switch:
+        loss1 = nn.L1Loss()
+        l1 = loss1(x,y)
+        loss2 = nn.CosineSimilarity(dim=0, eps=1e-6)
+        l2 = loss2(x,y).to(device)
+        ones = torch.ones(l2.size()).to(device)
+        loss3 = nn.BCEWithLogitsLoss()
+        l3 = loss3(x,y)
+        return l3 + torch.log(l1)#+ (ones+l2).mean()
+    else:
+        loss = nn.CosineSimilarity(dim=0, eps=1e-6)
+        l = loss(x,y).to(device)
+        ones = torch.ones(l.size()).to(device)
+        loss2 = nn.MSELoss()
+        l2 = loss2(x,y)
+        return torch.log(l2) + (-1)*torch.log((ones+l).mean())
 
-def LossKL(x,y):
-    loss = nn.KLDivLoss()
-    val = loss(x,y)*loss(x,y)
-    return val
+def Opt(model,adam=True,learning_rate=0.01):
+    if adam:
+        return optim.Adam(model.parameters(),lr=learning_rate)
+    else:
+        return optim.SGD(model.parameters(),lr=learning_rate)
 
-def LossBCEMSE(x,y):
-    funct1 = nn.BCELoss()
-    funct2 = nn.MSELoss()
-    mse = torch.log(funct2(x,y))
-    mse = torch.abs(mse)
-    return funct1(x,y) + mse
-
-
-def Opt(model,learning_rate=0.01):
-    return optim.Adam(model.parameters(),lr=learning_rate)
-
-def Schedule(opt,step_size=20,gamma=0.5):
+def Schedule(opt,step_size=10,gamma=0.5):
     scheduler = optim.lr_scheduler.StepLR(opt, step_size=step_size, gamma=gamma)
+    return scheduler
 
 # ======================================
 #
@@ -82,43 +87,46 @@ def Schedule(opt,step_size=20,gamma=0.5):
 # ======================================
 class Encoder_Conv(nn.Module):
     # convolution-based encoder module 
-    def __init__(self,device,input_dim = 3977, output_dim=1,depth=4):
+    def __init__(self,device,input_dim = 2982, output_dim=62,depth=6):
         super(Encoder_Conv, self).__init__()
         self.input_dim = input_dim
         self.depth = depth
-        self.init_fc = nn.Linear(input_dim, int(round(input_dim/10)))
-        self.rels = nn.LeakyReLU(0.4)
+        self.init_fc = nn.Linear(input_dim, int(round(input_dim/10))).to(device)
+        self.rels = nn.LeakyReLU(0.4).to(device)
         self.device = device
         # convolution layers
+        conv0 = nn.Conv2d(1,1,3,padding=1,stride=1)
         conv1 = nn.Conv2d(1,4,3,padding=1,stride=2)
         conv2 = nn.Conv2d(4,8,3,padding=1,stride=2)
         conv3 = nn.Conv2d(8,16,3,padding=1,stride=2)
         conv4 = nn.Conv2d(16,32,3,padding=1,stride=2)
-        self.list_convs = [conv1, conv2, conv3, conv4]
+        conv5 = nn.Conv2d(32,64,3,padding=1,stride=2)
+        self.list_convs = [conv0,conv1, conv2, conv3, conv4, conv5]
         # batch normalizations
-        bn1 = nn.BatchNorm2d(4)
-        bn2 = nn.BatchNorm2d(8)
-        bn3 = nn.BatchNorm2d(16)
-        bn4 = nn.BatchNorm2d(32)
-        self.list_bns = [bn1, bn2, bn3, bn4]
+        bn0 = nn.InstanceNorm2d(1)
+        bn1 = nn.InstanceNorm2d(4)
+        bn2 = nn.InstanceNorm2d(8)
+        bn3 = nn.InstanceNorm2d(16)
+        bn4 = nn.InstanceNorm2d(32)
+        bn5 = nn.InstanceNorm2d(64)
+        self.list_bns = [bn0, bn1, bn2, bn3, bn4, bn5]
         # final output layer
-        self.final_fc = nn.Linear(52,output_dim) # need to change this
+        self.final_fc = nn.Linear(20,output_dim).to(device) # need to change this
         self.sigs = nn.Sigmoid()
 
     def forward(self, x):
+        x = x.to(self.device)
         x = self.rels(self.init_fc(x))
-        x = x.view(x.size()[0],1,-1,199).to(self.device)#int(round(self.input_dim))).to(device)
+        x = x.view(x.size()[0],1,64,298).to(self.device)#int(round(self.input_dim))).to(device)
         for i in range(self.depth):
             funct1 = self.list_convs[i].to(self.device)
             funct2 = self.list_bns[i].to(self.device)
             x = funct1(x)
             x = funct2(x)
-        print(x.size())
-        exit()
+        x = x.reshape(2*64,-1)
         x = self.final_fc(x)
-        x = x.view(2,64)
-        x = self.sigs(x)
-        return x.to(self.device)
+        x = self.rels(x.reshape(2,64,-1))
+        return x
 
     def num_flat_features(self,x):
         size = x.size()[1:] # all dims except the batch dim
@@ -129,151 +137,96 @@ class Encoder_Conv(nn.Module):
 
 # ======================================
 #
-#   GRU-based Encoder 
+#   Encoder-to-text module 
 #
 # ======================================
-class Encoder_GRU(nn.Module):
-    def __init__(self, input_size, hidden_size, device, 
-                input_dim=3977,output_dim=62, depth=4,
-                batch_size=64, n_layers=3, drop_prob = 0):
-        super(Encoder_GRU, self).__init__()
-        self.hs = hidden_size
-        self.nl = n_layers
-        self.bs = batch_size
-        self.device=device
-        self.depth = depth
-        
-        self.final_fc1 = nn.Linear(199,62).to(device)
-        self.final_fc2 = nn.Linear(4,1).to(device)
-
-        self.init_fc = nn.Linear(input_dim, int(round(input_dim/10))).to(device)
-        self.rels = nn.LeakyReLU(0.4)
-        self.sigs = nn.Sigmoid()
-
-        # convolution layers
-        conv1 = nn.Conv2d(1,4,3,padding=1,stride=2)
-        conv2 = nn.Conv2d(4,8,3,padding=1,stride=2)
-        conv3 = nn.Conv2d(8,16,3,padding=1,stride=2)
-        conv4 = nn.Conv2d(16,32,3,padding=1,stride=2)
-        self.list_convs = [conv1, conv2, conv3, conv4]
-        # batch normalizations
-        bn1 = nn.BatchNorm2d(4)
-        bn2 = nn.BatchNorm2d(8)
-        bn3 = nn.BatchNorm2d(16)
-        bn4 = nn.BatchNorm2d(32)
-        self.list_bns = [bn1, bn2, bn3, bn4]
-
-        self.gru = nn.GRU(199, 199, n_layers,
-                            dropout=drop_prob,batch_first=True).to(device)
-        
-        
-    def init_hidden(self,hidden_size, batch_size):
-        return torch.zeros(self.nl, batch_size, hidden_size, 
-                            device=self.device,dtype=torch.float)
-
-    def forward(self, x):
-        x = self.rels(self.init_fc(x)).to(self.device)
-        x = x.view(x.size()[0],1,-1,199).to(self.device)#int(round(self.input_dim))).to(device)
-        #for i in range(self.depth):
-        #    funct1 = self.list_convs[i].to(self.device)
-        #    funct2 = self.list_bns[i].to(self.device)
-        #    x = funct1(x)
-        #    x = funct2(x)
-        #x = x.float() # okay, I'm inputting a float tensor, but somehow it becomes a long...
-                      # hence... this bs has to be added...
-        x = x.view(x.size()[0],-1,x.size()[-1])
-        hidden = self.init_hidden(hidden_size=x.size()[-1],
-                                  batch_size=x.size()[0])
-        # pass the embedded input vectors into an LSTM and return all outputs
-        x, hidden = self.gru(x,hidden)
-        x = x.reshape(-1,199)
-        x = self.sigs(self.final_fc1(x))
-        x = x.reshape(-1,128,62)
-
-        return x, hidden
-
-# ======================================
-#
-#    Attention Decoder
-#
-# ======================================
-class AttentionDecoder(nn.Module):
-    def __init__(self,hidden_size,output_size, vocab_size,device):
-        super(AttentionDecoder,self).__init__()
-        self.hs = hidden_size
-        self.os = output_size
+class ToText(nn.Module):
+    def __init__(self,output_size,device):
+        super(ToText,self).__init__()
         self.device = device
 
-        self.gru = nn.GRU(hidden_size + vocab_size, output_size).to(device)
-        self.attn = nn.Linear(hidden_size + output_size, 1).to(device)
-        self.fc = nn.Linear(output_size, vocab_size).to(device)
-        self.final = nn.Linear(129,128).to(device)
+        conv0 = nn.Conv2d(1,4,3,padding=1, stride=1).to(device)
+        conv1 = nn.Conv2d(4,16,3,padding=1, stride=1).to(device)
+        conv2 = nn.Conv2d(16,32,3,padding=1, stride=1).to(device)
+        conv3 = nn.Conv2d(32,64,3, padding=1, stride=1).to(device)
+        conv4 = nn.Conv2d(64,128,3,padding=1,stride=1).to(device)
+        bn0   = nn.InstanceNorm2d(4).to(device)
+        bn1   = nn.InstanceNorm2d(16).to(device)
+        bn2   = nn.InstanceNorm2d(32).to(device)
+        bn3   = nn.InstanceNorm2d(64).to(device)
+        bn4   = nn.InstanceNorm2d(128).to(device)
+        self.convs = [conv0, conv1,conv2,conv3,conv4]
+        self.bns = [bn0, bn1, bn2, bn3, bn4]
 
-        self.sigs = nn.Sigmoid()
+        self.depth = len(self.convs)
+
+        self.fs_3 = nn.Linear(7936,6000).to(device)
+        self.fs_2 = nn.Linear(6000,5000).to(device)
+        self.fs_1 = nn.Linear(5000, 4000).to(device)
+        self.fs = nn.Linear(4000,output_size).to(device)
         self.rels = nn.LeakyReLU(0.3)
+        self.m = nn.Dropout(p=0.2)
+    def forward(self,x):
+        x = x.reshape(2,1,64,-1)
+        for i in range(self.depth):
+            f1 = self.convs[i]
+            f2 = self.bns[i]
+            x = f1(x)
+            x = f2(x)
+        x = x.reshape(2,64,-1)
+        x = self.m(self.rels(self.fs_3(x)))
+        x = self.m(self.rels(self.fs_2(x)))
+        x = self.m(self.rels(self.fs_1(x)))
+        x = self.rels(self.fs(x))
 
-    def init_hidden(self):
-        return torch.zeros(1,128,self.os, device=self.device)
-    
-    def forward(self, prev_hidden, encoder_outputs):
-        weights = []
-        decoder_hidden = self.init_hidden()
-        
-        for i in range(len(encoder_outputs)):
-            concat = torch.cat((decoder_hidden[0],
-                                encoder_outputs[i]),dim=1)
-            weights.append(self.attn(concat))
-        normalized_weights = F.softmax(torch.cat(weights, 1),1)
-        normalized_weights = normalized_weights.unsqueeze(1).reshape(2,1,-1)
-        attn_applied = torch.bmm(normalized_weights,encoder_outputs)
-        input_gru = torch.cat((attn_applied,
-                               encoder_outputs),dim=1)
-        input_gru = input_gru.reshape(1,129,-1)
-        decoder_hidden = torch.cat((decoder_hidden, 
-                                    torch.rand(1,1,decoder_hidden.size()[-1]).to(self.device)),
-                                    dim=1)
-        output, hidden = self.gru(input_gru, decoder_hidden)
-        output = self.rels(self.fc(output))
-        output = self.final(torch.transpose(output,1,2))
-        output = self.sigs(torch.transpose(output,1,2)).reshape(2,64,-1)
-
-        return output, hidden, normalized_weights
+        return x
 
 # ======================================
 #
-#   Decoder 
+#  Decoder Module
 #
 # ======================================
 class Decoder(nn.Module):
-    def __init__(self,output_size,device,batch_size):
+    def __init__(self, output_size, device, batch_size):
         super(Decoder,self).__init__()
-        self.depth = 4
         self.bn = batch_size
         # convolution layers
         conv1 = nn.Conv2d(1,4,3,padding=1,stride=1)
         conv2 = nn.Conv2d(4,8,3,padding=1,stride=1)
         conv3 = nn.Conv2d(8,16,3,padding=1,stride=1)
         conv4 = nn.Conv2d(16,32,3,padding=1,stride=1)
-        self.list_convs = [conv1, conv2, conv3, conv4]
+        conv5 = nn.Conv2d(32,64,3,padding=1,stride=1)
+        self.list_convs = [conv1, conv2, conv3, conv4, conv5]
         # batch normalizations
-        bn1 = nn.BatchNorm2d(4)
-        bn2 = nn.BatchNorm2d(8)
-        bn3 = nn.BatchNorm2d(16)
-        bn4 = nn.BatchNorm2d(32)
-        self.list_bns = [bn1, bn2, bn3, bn4]
+        bn1 = nn.InstanceNorm2d(4)
+        bn2 = nn.InstanceNorm2d(8)
+        bn3 = nn.InstanceNorm2d(16)
+        bn4 = nn.InstanceNorm2d(32)
+        bn5 = nn.InstanceNorm2d(64)
+        self.list_bns = [bn1, bn2, bn3, bn4, bn5]
 
+        self.depth = len(self.list_bns)
+
+        self.m = nn.Dropout(p=0.2)
         self.rels = nn.LeakyReLU(0.3)
-        self.fs = nn.Linear(1984,output_size).to(device)
-        self.device=device
+        self.fs_4 = nn.Linear(3968, 3700).to(device)
+        self.fs_3 = nn.Linear(3700,3500).to(device)
+        self.fs_2 = nn.Linear(3500,3300).to(device)
+        self.fs_1 = nn.Linear(3300,3100).to(device)
+        self.fs = nn.Linear(3100,output_size).to(device)
+        self.device = device
 
-    def forward(self,x):
-        x = x.reshape(self.bn,1,-1,62)
-        # pass the x to the convolution layers
+    def forward(self, x):
+        x = x.reshape(self.bn, 1, -1, 62)
         for i in range(self.depth):
             funct1 = self.list_convs[i].to(self.device)
             funct2 = self.list_bns[i].to(self.device)
             x = funct1(x)
-            x = funct2(x)
+            x = self.rels(funct2(x))
         x = x.reshape(2,64,-1)
-        x = self.rels(self.fs(x)) * (-1)
+        x = self.m(self.rels(self.fs_4(x)))
+        x = self.m(self.rels(self.fs_3(x)))
+        x = self.m(self.rels(self.fs_2(x)))
+        x = self.m(self.rels(self.fs_1(x)))
+        x = self.fs(x)
         return x
