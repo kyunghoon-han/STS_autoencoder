@@ -13,7 +13,7 @@ The model is constituted of 3 parts:
 
 I am trying to keep the model as small as possible as I expect this model to be used along with other models, not by itself.
 
-TODO:
+TODO
 	- adopt argparse to assign the output directory and possibly allow the model to take inputs from the user
 	- modify the hard-coded parts of the network
 	- implement RNN somewhere (possibly in the encoder)
