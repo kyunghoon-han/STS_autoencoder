@@ -1,4 +1,5 @@
 *.npz
 *.wav
+*.pt
 ./preprocessing_unit/preprocessed
 ./preprocessing_unit/data
