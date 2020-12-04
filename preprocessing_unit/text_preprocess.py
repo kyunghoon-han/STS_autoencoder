@@ -67,7 +67,7 @@ def encoder_generator(vec=False):
 
     return hangul_dict
 
-def sentence2vec(a_sentence, hangul_dict = {},filename=".encoded_hangul.pkl", 
+def sentence2vec(a_sentence, decom_bool=True,hangul_dict = {},filename=".encoded_hangul.pkl", 
                 from_file=False, vec=False):
     a_sentence = a_sentence.replace("“","\"").replace("”","\"").replace("/"," ")
     a_sentence = a_sentence.replace("’","'").replace("‘","'").replace("`","'")
@@ -89,7 +89,8 @@ def sentence2vec(a_sentence, hangul_dict = {},filename=".encoded_hangul.pkl",
             hangul_dict = encoder_generator(vec=True)
     # now a for loop
     output = []
-    sentence_decom = sentence_to_decomposition(a_sentence)
+    if decom_bool:
+        sentence_decom = sentence_to_decomposition(a_sentence)
     for a in sentence_decom:
         #print("this is a: ", a)
         #print("what would be hangul_dict[a]? ",hangul_dict[a])

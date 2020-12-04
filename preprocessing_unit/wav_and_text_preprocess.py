@@ -1,7 +1,7 @@
 import os, csv
 import librosa
 import numpy as np
-from text_preprocess import sentence2vec
+from text_preprocess import sentence2vec,sentence_to_decomposition
 from tqdm import tqdm
 
 #
@@ -85,6 +85,7 @@ def wav_list_from_data_dict_result(data_dict_result,directory = './preprocessed'
                 if len(wav) > wav_max:
                     wav_max = len(wav)
                 if len(sentence) > txt_max:
+                    sentence = sentence_to_decomposition(sentence)
                     txt_max = len(sentence)
 
     counter = 0
@@ -107,8 +108,11 @@ def wav_list_from_data_dict_result(data_dict_result,directory = './preprocessed'
                     diff_length = wav_max - len(wav)
                     wav = wav + [0]*diff_length
                     wav = np.array(wav)
-                #while len(sentence) < txt_max:
-                #    sentence = sentence + '*'
+
+                sentence = sentence_to_decomposition(sentence)
+                if len(sentence) < txt_max:
+                    diff_length = txt_max - len(sentence)
+                    sentence = sentence + '*'*(diff_length+3)
                 
                 # obtain the MEL and save the array to the respective file
                 mel = librosa.feature.melspectrogram(y=wav, sr=sr)

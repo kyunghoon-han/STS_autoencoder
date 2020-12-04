@@ -26,8 +26,8 @@ def open_list_pairs(path=path_list_pairs):
 
 #====================================
 # Hyperparameters 
-batch_size = 64
-epochs = 100
+batch_size = 4
+epochs = 1000
 num_test = 100
 
 # ==================================
@@ -38,14 +38,17 @@ def batch_split(lst,batch_size=batch_size, is_txt=False, dict_val=None):
     list_tmp = [lst[i:i+batch_size] for i in range(0, len(lst), batch_size)]
     list_output = []
     for stuff in list_tmp:
-        if len(stuff) == 64:
+        if isinstance(stuff, np.ndarray):
+            stuff = np.ndarray.tolist(stuff)
+
+        if len(stuff) == 4:
             list_output.append(stuff)
-        elif len(stuff) < 64:
+        elif len(stuff) < 4:
             if is_txt:
-                while len(stuff) < 64:
+                while len(stuff) < 4:
                     stuff.append(dict_val['*'])
             else:
-                while len(stuff) < 64:
+                while len(stuff) < 4:
                     stuff.append(0.0)
             list_output.append(stuff)
         else:
@@ -108,32 +111,37 @@ def trainer():
     num_discarded = 0
     f.write("step, loss, STT_loss, STS_loss \n")
     
-    # define the standardizer
-    '''
-    txt_standardize = []
-    wav_standardize = []
-    counter = 0
-    print("Making a Standardizer...")
+    # pre-define the models
+    path_txt = ''
+    path_wav = ''
     for pair in train_stuff:
-        if counter > 1000:
-            break
-        counter += 1
         path_txt = os.path.join(data_dir.replace('preprocessed',''),pair[0].replace('./',''))
         path_wav = os.path.join(data_dir.replace('preprocessed',''),pair[1].replace('./',''))
         if not os.path.exists(path_txt):
             train_stuff.remove(pair)
             continue
-        elif not os.path.exists(path_wav):
+        if not os.path.exists(path_wav):
             train_stuff.remove(pair)
             continue
-        txt_target = np.load(path_txt)['arr_0'].tolist()
-        wav_target = np.load(path_wav)['arr_0'].tolist()
-        txt_standardize.append(txt_target)
-        wav_standardize.append(wav_target)
-    std = StandardScaler()
-    std_txt = std.fit(txt_standardize)
-    std_wav = std.fit(wav_standardize)
-    '''
+        break
+    txt_target = np.load(path_txt)['arr_0'].tolist()
+    wav_source = np.load(path_wav)['arr_0'].tolist()
+    txt_target = torch.FloatTensor(batch_split(txt_target,
+                                    is_txt=True,
+                                    dict_val=dict_txt)).to(device)
+    wav_source = torch.FloatTensor(batch_split(wav_source)).to(device) 
+    output_size = wav_source.size()[-1]
+    encoder = Encoder_Conv(device=device) # encoder module
+    decoder = Decoder(output_size,device=device,batch_size=batch_size) # decoder module
+    opt_1 = Opt(encoder,adam=False,learning_rate=0.3) # optimizers
+    opt_2 = Opt(decoder,learning_rate=0.3)
+    sch_1 = Schedule(opt_1,step_size=500)
+    sch_2 = Schedule(opt_2,step_size=500)
+    output_size = txt_target.size()[-1]
+    text_decoder = ToText(output_size=output_size,device=device) # to_text module
+    opt_t = Opt(text_decoder,adam=False, learning_rate=0.8)
+    sch_t = Schedule(opt_t, step_size=500)
+
 
     while e < epochs :
         e += 1
@@ -145,9 +153,11 @@ def trainer():
             path_wav = os.path.join(data_dir.replace('preprocessed',''),pair[1].replace('./',''))
             if not os.path.exists(path_txt):
                 train_stuff.remove(pair)
+                num_discarded += 1
                 continue
             elif not os.path.exists(path_wav):
                 train_stuff.remove(pair)
+                num_discarded += 1
                 continue
             txt_target = np.load(path_txt)['arr_0'].tolist()
             wav_source = np.load(path_wav)['arr_0'].tolist()
@@ -157,51 +167,63 @@ def trainer():
             wav_source = std_wav.transform(wav_source)
             
             # split the data into batches
-            txt_target = torch.FloatTensor(batch_split(txt_target,
-                                            is_txt=True,
-                                            dict_val=dict_txt)).to(device)
+            tmp = batch_split(txt_target,
+                    is_txt=True,
+                    dict_val=dict_txt)
+            if len(tmp) == 68:
+                tmp = tmp[:-1]
+            elif len(tmp) == 67:
+                pass
+            else:
+                print("a text file is corrupted")
+                continue
+            txt_target = torch.FloatTensor(tmp).to(device)
             wav_source = torch.FloatTensor(batch_split(wav_source)).to(device)
             # discard the long sources
+            '''
             if wav_source.size()[0] != txt_target.size()[0]:
-                step -= 1
                 num_discarded += 1
                 os.remove(path_txt)
                 os.remove(path_wav)
                 continue
+            '''
 
             # an STS autoencoder module
+            '''
             if step == 0 :
                 output_size = wav_source.size()[-1]
                 encoder = Encoder_Conv(device=device) # call the models
                 decoder = Decoder(output_size,device=device,batch_size=batch_size)
-                opt_1 = Opt(encoder,adam=False,learning_rate=0.05) # optimizers
-                opt_2 = Opt(decoder,learning_rate=0.05)
-                sch_1 = Schedule(opt_1,step_size=500)
-                sch_2 = Schedule(opt_2,step_size=500)
+                opt_1 = Opt(encoder,adam=False,learning_rate=0.1) # optimizers
+                opt_2 = Opt(decoder,learning_rate=0.1)
+                sch_1 = Schedule(opt_1,step_size=100)
+                sch_2 = Schedule(opt_2,step_size=100)
+            '''
             opt_1.zero_grad()
             opt_2.zero_grad()
             encoded_wav = encoder(wav_source)
+            encoded_wav.retain_grad()
             decoded_wav = decoder(encoded_wav)
-
+            decoded_wav.retain_grad()
             loss_STS = LossMSE(decoded_wav,wav_source.to(device),device,switch=True)
             loss_STS.backward()
             opt_2.step()
             opt_1.step()
             
             # an STT module
+            '''
             if step == 0:
                 output_size = txt_target.size()[-1]
                 text_decoder = ToText(output_size=output_size,device=device)
-                opt_t = Opt(text_decoder, learning_rate=0.01)
+                opt_t = Opt(text_decoder,adam=False, learning_rate=0.8)
                 sch_t = Schedule(opt_t, step_size=100)
-            encoded_wav = encoder(wav_source)
+            '''
+            encoded_wav = encoder(wav_source).detach()
             opt_t.zero_grad()
-            opt_1.zero_grad()
             text_source = text_decoder(encoded_wav)
             loss_STT = LossMSE(text_source,txt_target,device)
             loss_STT.backward()
             opt_t.step()
-            opt_1.step()
 
             if sch_1 is not None:
                 sch_1.step()
@@ -211,15 +233,15 @@ def trainer():
                 print("The schedulers are not properly defined")
 
             loss = loss_STS + loss_STT
-            
-            if step % 3000 == 7:
-                string_out = "At step %i, the loss is %.2f" % (step, loss)
+
+            if step % 300 == 7:
+                string_out = "At step %i, the loss is %.4f" % (step, loss)
                 print(string_out)
-                string_out = "with the STT loss %.2f, STS loss %.2f" % (loss_STT, loss_STS)
+                string_out = "with the STT loss %.4f, STS loss %.4f" % (loss_STT, loss_STS)
                 print(string_out)
             
             if step % 100 == 0:
-                string_out = "%i , %.2f, %.2f, %.2f \n" % (step, loss, loss_STT,loss_STS)
+                string_out = "%i , %.3f, %.3f, %.3f \n" % (step, loss, loss_STT,loss_STS)
                 f.write(string_out)
             step += 1
 
@@ -233,12 +255,20 @@ def trainer():
             wav_source = np.load(path_wav)['arr_0'].tolist()
             wav_source = std_wav.transform(wav_source)
             # split the data into batches
-            txt_target = torch.FloatTensor(batch_split(txt_target,
-                                            is_txt=True,
-                                            dict_val=dict_txt)).to(device)
-            wav_source = torch.FloatTensor(batch_split(wav_source)).to(device)
-            if wav_source.size()[0] != txt_target.size()[0]:
+            tmp = batch_split(txt_target,
+                    is_txt=True,
+                    dict_val=dict_txt)
+            if len(tmp) == 68:
+                tmp = tmp[:-1]
+            elif len(tmp) == 67:
+                pass
+            else:
+                print("a text file is corrupted")
                 continue
+            txt_target = torch.FloatTensor(tmp).to(device)
+            wav_source = torch.FloatTensor(batch_split(wav_source)).to(device)
+            #if wav_source.size()[0] != txt_target.size()[0]:
+            #    continue
             # just to make sure the the input values are floats
             txt_target = txt_target.float()
             wav_source = wav_source.float()
@@ -256,7 +286,7 @@ def trainer():
         test_loss = test_loss
         test_loss = test_loss / counter
         print("The number of discarded data is: ",num_discarded)
-        test_report = "The validation loss is : %.2f" %(test_loss)
+        test_report = "The validation loss is : %.5f" %(test_loss)
         print(test_report)
         # to save the model...
         if e%10 == 0:

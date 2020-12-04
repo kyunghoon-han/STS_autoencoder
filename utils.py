@@ -61,14 +61,14 @@ def LossMSE(x,y,device,switch=False):
         ones = torch.ones(l2.size()).to(device)
         loss3 = nn.BCEWithLogitsLoss()
         l3 = loss3(x,y)
-        return l3 + torch.log(l1)#+ (ones+l2).mean()
+        return  l3 + (ones+l2).mean()
     else:
         loss = nn.CosineSimilarity(dim=0, eps=1e-6)
         l = loss(x,y).to(device)
         ones = torch.ones(l.size()).to(device)
         loss2 = nn.MSELoss()
         l2 = loss2(x,y)
-        return torch.log(l2) + (-1)*torch.log((ones+l).mean())
+        return (ones + l).mean()
 
 def Opt(model,adam=True,learning_rate=0.01):
     if adam:
@@ -76,7 +76,7 @@ def Opt(model,adam=True,learning_rate=0.01):
     else:
         return optim.SGD(model.parameters(),lr=learning_rate)
 
-def Schedule(opt,step_size=10,gamma=0.5):
+def Schedule(opt,step_size=500,gamma=0.5):
     scheduler = optim.lr_scheduler.StepLR(opt, step_size=step_size, gamma=gamma)
     return scheduler
 
@@ -87,7 +87,7 @@ def Schedule(opt,step_size=10,gamma=0.5):
 # ======================================
 class Encoder_Conv(nn.Module):
     # convolution-based encoder module 
-    def __init__(self,device,input_dim = 2982, output_dim=62,depth=6):
+    def __init__(self,device,input_dim = 3977, output_dim=62,depth=6):
         super(Encoder_Conv, self).__init__()
         self.input_dim = input_dim
         self.depth = depth
@@ -111,21 +111,21 @@ class Encoder_Conv(nn.Module):
         bn5 = nn.InstanceNorm2d(64)
         self.list_bns = [bn0, bn1, bn2, bn3, bn4, bn5]
         # final output layer
-        self.final_fc = nn.Linear(20,output_dim).to(device) # need to change this
+        self.final_fc = nn.Linear(3328,output_dim).to(device) # need to change this
         self.sigs = nn.Sigmoid()
 
     def forward(self, x):
         x = x.to(self.device)
         x = self.rels(self.init_fc(x))
-        x = x.view(x.size()[0],1,64,298).to(self.device)#int(round(self.input_dim))).to(device)
+        x = x.view(x.size()[0],1,4,-1).to(self.device)#int(round(self.input_dim))).to(device)
         for i in range(self.depth):
             funct1 = self.list_convs[i].to(self.device)
             funct2 = self.list_bns[i].to(self.device)
             x = funct1(x)
             x = funct2(x)
-        x = x.reshape(2*64,-1)
+        x = x.reshape(2*4,-1)
         x = self.final_fc(x)
-        x = self.rels(x.reshape(2,64,-1))
+        x = self.rels(x.reshape(2,4,-1))
         return x
 
     def num_flat_features(self,x):
@@ -160,21 +160,22 @@ class ToText(nn.Module):
 
         self.depth = len(self.convs)
 
-        self.fs_3 = nn.Linear(7936,6000).to(device)
-        self.fs_2 = nn.Linear(6000,5000).to(device)
-        self.fs_1 = nn.Linear(5000, 4000).to(device)
-        self.fs = nn.Linear(4000,output_size).to(device)
+        self.fs_3 = nn.Linear(496,670).to(device)
+        self.fs_2 = nn.Linear(320,180).to(device)
+        self.fs_1 = nn.Linear(180, 100).to(device)
+        self.fs = nn.Linear(100,output_size).to(device)
         self.rels = nn.LeakyReLU(0.3)
         self.m = nn.Dropout(p=0.2)
     def forward(self,x):
-        x = x.reshape(2,1,64,-1)
+        x = x.reshape(2,1,4,-1)
         for i in range(self.depth):
             f1 = self.convs[i]
             f2 = self.bns[i]
             x = f1(x)
             x = f2(x)
-        x = x.reshape(2,64,-1)
+        x = x.reshape(32,4,-1)
         x = self.m(self.rels(self.fs_3(x)))
+        x = x.reshape(67,4,-1)
         x = self.m(self.rels(self.fs_2(x)))
         x = self.m(self.rels(self.fs_1(x)))
         x = self.rels(self.fs(x))
@@ -209,11 +210,11 @@ class Decoder(nn.Module):
 
         self.m = nn.Dropout(p=0.2)
         self.rels = nn.LeakyReLU(0.3)
-        self.fs_4 = nn.Linear(3968, 3700).to(device)
-        self.fs_3 = nn.Linear(3700,3500).to(device)
-        self.fs_2 = nn.Linear(3500,3300).to(device)
-        self.fs_1 = nn.Linear(3300,3100).to(device)
-        self.fs = nn.Linear(3100,output_size).to(device)
+        self.fs_4 = nn.Linear(248,600).to(device)
+        self.fs_3 = nn.Linear(600,1000).to(device)
+        self.fs_2 = nn.Linear(1000,1500).to(device)
+        self.fs_1 = nn.Linear(1500,2000).to(device)
+        self.fs = nn.Linear(2000,output_size).to(device)
         self.device = device
 
     def forward(self, x):
@@ -223,7 +224,7 @@ class Decoder(nn.Module):
             funct2 = self.list_bns[i].to(self.device)
             x = funct1(x)
             x = self.rels(funct2(x))
-        x = x.reshape(2,64,-1)
+        x = x.reshape(32,4,-1)
         x = self.m(self.rels(self.fs_4(x)))
         x = self.m(self.rels(self.fs_3(x)))
         x = self.m(self.rels(self.fs_2(x)))
