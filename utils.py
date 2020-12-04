@@ -61,14 +61,14 @@ def LossMSE(x,y,device,switch=False):
         ones = torch.ones(l2.size()).to(device)
         loss3 = nn.BCEWithLogitsLoss()
         l3 = loss3(x,y)
-        return  l3 + (ones+l2).mean()
+        return  l3 #+ torch.sqrt((ones+l2).sum()) + torch.sqrt(l1)
     else:
         loss = nn.CosineSimilarity(dim=0, eps=1e-6)
         l = loss(x,y).to(device)
         ones = torch.ones(l.size()).to(device)
-        loss2 = nn.MSELoss()
+        loss2 = nn.L1Loss()
         l2 = loss2(x,y)
-        return (ones + l).mean()
+        return 100.0*(ones+l).mean() #torch.sqrt(l2) + torch.sqrt((ones + l).sum())
 
 def Opt(model,adam=True,learning_rate=0.01):
     if adam:
@@ -141,7 +141,7 @@ class Encoder_Conv(nn.Module):
 #
 # ======================================
 class ToText(nn.Module):
-    def __init__(self,output_size,device):
+    def __init__(self,input_size,output_size,device):
         super(ToText,self).__init__()
         self.device = device
 
@@ -160,13 +160,15 @@ class ToText(nn.Module):
 
         self.depth = len(self.convs)
 
-        self.fs_3 = nn.Linear(496,670).to(device)
+        self.fs_init = nn.Linear(input_size,input_size*2).to(device)
+        self.fs_3 = nn.Linear(992,670).to(device)
         self.fs_2 = nn.Linear(320,180).to(device)
         self.fs_1 = nn.Linear(180, 100).to(device)
         self.fs = nn.Linear(100,output_size).to(device)
         self.rels = nn.LeakyReLU(0.3)
         self.m = nn.Dropout(p=0.2)
     def forward(self,x):
+        x = self.m(self.rels(self.fs_init(x)))
         x = x.reshape(2,1,4,-1)
         for i in range(self.depth):
             f1 = self.convs[i]
@@ -188,7 +190,7 @@ class ToText(nn.Module):
 #
 # ======================================
 class Decoder(nn.Module):
-    def __init__(self, output_size, device, batch_size):
+    def __init__(self, input_size, output_size, device, batch_size):
         super(Decoder,self).__init__()
         self.bn = batch_size
         # convolution layers
@@ -207,10 +209,11 @@ class Decoder(nn.Module):
         self.list_bns = [bn1, bn2, bn3, bn4, bn5]
 
         self.depth = len(self.list_bns)
-
         self.m = nn.Dropout(p=0.2)
         self.rels = nn.LeakyReLU(0.3)
-        self.fs_4 = nn.Linear(248,600).to(device)
+
+        self.fs_init = nn.Linear(input_size,input_size*2).to(device)
+        self.fs_4 = nn.Linear(496,600).to(device)
         self.fs_3 = nn.Linear(600,1000).to(device)
         self.fs_2 = nn.Linear(1000,1500).to(device)
         self.fs_1 = nn.Linear(1500,2000).to(device)
@@ -218,6 +221,7 @@ class Decoder(nn.Module):
         self.device = device
 
     def forward(self, x):
+        x = self.m(self.rels(self.fs_init(x)))
         x = x.reshape(self.bn, 1, -1, 62)
         for i in range(self.depth):
             funct1 = self.list_convs[i].to(self.device)

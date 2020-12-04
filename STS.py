@@ -1,6 +1,5 @@
 from utils import Decoder,LossMSE,Opt,Schedule,Encoder_Conv, ToText
 import numpy as np
-import matplotlib.pyplot as plt
 import librosa, torch, os, csv, pickle, shutil
 from tqdm import tqdm
 from sklearn.preprocessing import StandardScaler
@@ -132,14 +131,15 @@ def trainer():
     wav_source = torch.FloatTensor(batch_split(wav_source)).to(device) 
     output_size = wav_source.size()[-1]
     encoder = Encoder_Conv(device=device) # encoder module
-    decoder = Decoder(output_size,device=device,batch_size=batch_size) # decoder module
-    opt_1 = Opt(encoder,adam=False,learning_rate=0.3) # optimizers
-    opt_2 = Opt(decoder,learning_rate=0.3)
+    input_size = encoder(wav_source).size()[-1]
+    decoder = Decoder(input_size,output_size,device=device,batch_size=batch_size) # decoder module
+    opt_1 = Opt(encoder,adam=False,learning_rate=0.01) # optimizers
+    opt_2 = Opt(decoder,learning_rate=0.01)
     sch_1 = Schedule(opt_1,step_size=500)
     sch_2 = Schedule(opt_2,step_size=500)
     output_size = txt_target.size()[-1]
-    text_decoder = ToText(output_size=output_size,device=device) # to_text module
-    opt_t = Opt(text_decoder,adam=False, learning_rate=0.8)
+    text_decoder = ToText(input_size,output_size=output_size,device=device) # to_text module
+    opt_t = Opt(text_decoder,adam=False, learning_rate=0.05)
     sch_t = Schedule(opt_t, step_size=500)
 
 
@@ -161,10 +161,10 @@ def trainer():
                 continue
             txt_target = np.load(path_txt)['arr_0'].tolist()
             wav_source = np.load(path_wav)['arr_0'].tolist()
-            if step == 0:
-                std = StandardScaler()
-            std_wav = std.fit(wav_source)
-            wav_source = std_wav.transform(wav_source)
+            #if step == 0:
+            #    std = StandardScaler()
+            #std_wav = std.fit(wav_source)
+            #wav_source = std_wav.transform(wav_source)
             
             # split the data into batches
             tmp = batch_split(txt_target,
@@ -218,12 +218,14 @@ def trainer():
                 opt_t = Opt(text_decoder,adam=False, learning_rate=0.8)
                 sch_t = Schedule(opt_t, step_size=100)
             '''
-            encoded_wav = encoder(wav_source).detach()
+            opt_1.zero_grad()
             opt_t.zero_grad()
+            encoded_wav = encoder(wav_source)
             text_source = text_decoder(encoded_wav)
             loss_STT = LossMSE(text_source,txt_target,device)
             loss_STT.backward()
             opt_t.step()
+            opt_1.step()
 
             if sch_1 is not None:
                 sch_1.step()
@@ -234,7 +236,7 @@ def trainer():
 
             loss = loss_STS + loss_STT
 
-            if step % 300 == 7:
+            if step % 3000 == 7:
                 string_out = "At step %i, the loss is %.4f" % (step, loss)
                 print(string_out)
                 string_out = "with the STT loss %.4f, STS loss %.4f" % (loss_STT, loss_STS)
@@ -253,7 +255,7 @@ def trainer():
             path_wav = os.path.join(data_dir.replace('preprocessed',''),pair[1].replace('./',''))
             txt_target = np.load(path_txt)['arr_0'].tolist()
             wav_source = np.load(path_wav)['arr_0'].tolist()
-            wav_source = std_wav.transform(wav_source)
+            #wav_source = std_wav.transform(wav_source)
             # split the data into batches
             tmp = batch_split(txt_target,
                     is_txt=True,
@@ -289,7 +291,7 @@ def trainer():
         test_report = "The validation loss is : %.5f" %(test_loss)
         print(test_report)
         # to save the model...
-        if e%10 == 0:
+        if e%1 == 0:
             if not os.path.exists("./models"):
                 os.mkdir("./models")
             path = "./models/epoch_%i.pt" %(e)
