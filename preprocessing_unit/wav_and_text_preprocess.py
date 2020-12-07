@@ -116,7 +116,7 @@ def wav_list_from_data_dict_result(data_dict_result,directory = './preprocessed'
                 
                 # obtain the MEL and save the array to the respective file
                 mel = librosa.feature.melspectrogram(y=wav, sr=sr)
-                mel_db = librosa.power_to_db(mel, ref=np.max) # to db scale
+                mel_db = mel #librosa.power_to_db(mel, ref=np.max) # to db scale
                 if not os.path.isdir(directory):
                     os.mkdir(directory)
                 np.savez(wav_filename, mel_db)

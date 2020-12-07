@@ -68,13 +68,13 @@ def LossMSE(x,y,device,switch=False):
         ones = torch.ones(l.size()).to(device)
         loss2 = nn.L1Loss()
         l2 = loss2(x,y)
-        return 100.0*(ones+l).mean() #torch.sqrt(l2) + torch.sqrt((ones + l).sum())
+        return (ones+l).mean() #+ torch.sqrt(l2) + torch.sqrt((ones + l).sum())
 
 def Opt(model,adam=True,learning_rate=0.01):
     if adam:
-        return optim.Adam(model.parameters(),lr=learning_rate)
+        return optim.Adam(model.parameters(),lr=learning_rate,amsgrad=True)
     else:
-        return optim.SGD(model.parameters(),lr=learning_rate)
+        return optim.SGD(model.parameters(),lr=learning_rate,momentum=0.1,nesterov=True)
 
 def Schedule(opt,step_size=500,gamma=0.5):
     scheduler = optim.lr_scheduler.StepLR(opt, step_size=step_size, gamma=gamma)
@@ -95,21 +95,19 @@ class Encoder_Conv(nn.Module):
         self.rels = nn.LeakyReLU(0.4).to(device)
         self.device = device
         # convolution layers
-        conv0 = nn.Conv2d(1,1,3,padding=1,stride=1)
-        conv1 = nn.Conv2d(1,4,3,padding=1,stride=2)
-        conv2 = nn.Conv2d(4,8,3,padding=1,stride=2)
-        conv3 = nn.Conv2d(8,16,3,padding=1,stride=2)
-        conv4 = nn.Conv2d(16,32,3,padding=1,stride=2)
-        conv5 = nn.Conv2d(32,64,3,padding=1,stride=2)
-        self.list_convs = [conv0,conv1, conv2, conv3, conv4, conv5]
+        self.conv0 = nn.Conv2d(1,1,3,padding=1,stride=1).to(device)
+        self.conv1 = nn.Conv2d(1,4,3,padding=1,stride=2).to(device)
+        self.conv2 = nn.Conv2d(4,8,3,padding=1,stride=2).to(device)
+        self.conv3 = nn.Conv2d(8,16,3,padding=1,stride=2).to(device)
+        self.conv4 = nn.Conv2d(16,32,3,padding=1,stride=2).to(device)
+        self.conv5 = nn.Conv2d(32,64,3,padding=1,stride=2).to(device)
         # batch normalizations
-        bn0 = nn.InstanceNorm2d(1)
-        bn1 = nn.InstanceNorm2d(4)
-        bn2 = nn.InstanceNorm2d(8)
-        bn3 = nn.InstanceNorm2d(16)
-        bn4 = nn.InstanceNorm2d(32)
-        bn5 = nn.InstanceNorm2d(64)
-        self.list_bns = [bn0, bn1, bn2, bn3, bn4, bn5]
+        self.bn0 = nn.InstanceNorm2d(1)
+        self.bn1 = nn.InstanceNorm2d(4)
+        self.bn2 = nn.InstanceNorm2d(8)
+        self.bn3 = nn.InstanceNorm2d(16)
+        self.bn4 = nn.InstanceNorm2d(32)
+        self.bn5 = nn.InstanceNorm2d(64)
         # final output layer
         self.final_fc = nn.Linear(3328,output_dim).to(device) # need to change this
         self.sigs = nn.Sigmoid()
@@ -118,11 +116,13 @@ class Encoder_Conv(nn.Module):
         x = x.to(self.device)
         x = self.rels(self.init_fc(x))
         x = x.view(x.size()[0],1,4,-1).to(self.device)#int(round(self.input_dim))).to(device)
-        for i in range(self.depth):
-            funct1 = self.list_convs[i].to(self.device)
-            funct2 = self.list_bns[i].to(self.device)
-            x = funct1(x)
-            x = funct2(x)
+        x = self.bn0(self.conv0(x))
+        x = self.bn1(self.conv1(x))
+        x = self.bn2(self.conv2(x))
+        x = self.bn3(self.conv3(x))
+        x = self.bn4(self.conv4(x))
+        x = self.bn5(self.conv5(x))
+
         x = x.reshape(2*4,-1)
         x = self.final_fc(x)
         x = self.rels(x.reshape(2,4,-1))
@@ -137,6 +137,29 @@ class Encoder_Conv(nn.Module):
 
 # ======================================
 #
+#   Intermediate latent network 
+#
+# ======================================
+class Latent(nn.Module):
+    def __init__(self, input_size, device):
+        super(Latent,self).__init__()
+        self.device = device
+        self.d = nn.Dropout(p=0.2)
+        self.rels = nn.LeakyReLU(0.3)
+        self.f1 = nn.Linear(input_size,input_size*2).to(device)
+        self.f2 = nn.Linear(input_size*2, input_size*3).to(device)
+        self.f3 = nn.Linear(input_size*3, input_size*2).to(device)
+        self.f4 = nn.Linear(input_size*2, input_size).to(device)
+    def forward(self,x):
+        x = self.d(self.rels(self.f1(x)))
+        x = self.d(self.rels(self.f2(x)))
+        x = self.d(self.rels(self.f3(x)))
+        x = self.d(self.rels(self.f4(x)))
+        return x
+
+
+# ======================================
+#
 #   Encoder-to-text module 
 #
 # ======================================
@@ -145,20 +168,16 @@ class ToText(nn.Module):
         super(ToText,self).__init__()
         self.device = device
 
-        conv0 = nn.Conv2d(1,4,3,padding=1, stride=1).to(device)
-        conv1 = nn.Conv2d(4,16,3,padding=1, stride=1).to(device)
-        conv2 = nn.Conv2d(16,32,3,padding=1, stride=1).to(device)
-        conv3 = nn.Conv2d(32,64,3, padding=1, stride=1).to(device)
-        conv4 = nn.Conv2d(64,128,3,padding=1,stride=1).to(device)
-        bn0   = nn.InstanceNorm2d(4).to(device)
-        bn1   = nn.InstanceNorm2d(16).to(device)
-        bn2   = nn.InstanceNorm2d(32).to(device)
-        bn3   = nn.InstanceNorm2d(64).to(device)
-        bn4   = nn.InstanceNorm2d(128).to(device)
-        self.convs = [conv0, conv1,conv2,conv3,conv4]
-        self.bns = [bn0, bn1, bn2, bn3, bn4]
-
-        self.depth = len(self.convs)
+        self.conv0 = nn.Conv2d(1,4,3,padding=1, stride=1).to(device)
+        self.conv1 = nn.Conv2d(4,16,3,padding=1, stride=1).to(device)
+        self.conv2 = nn.Conv2d(16,32,3,padding=1, stride=1).to(device)
+        self.conv3 = nn.Conv2d(32,64,3, padding=1, stride=1).to(device)
+        self.conv4 = nn.Conv2d(64,128,3,padding=1,stride=1).to(device)
+        self.bn0   = nn.InstanceNorm2d(4).to(device)
+        self.bn1   = nn.InstanceNorm2d(16).to(device)
+        self.bn2   = nn.InstanceNorm2d(32).to(device)
+        self.bn3   = nn.InstanceNorm2d(64).to(device)
+        self.bn4   = nn.InstanceNorm2d(128).to(device)
 
         self.fs_init = nn.Linear(input_size,input_size*2).to(device)
         self.fs_3 = nn.Linear(992,670).to(device)
@@ -170,11 +189,11 @@ class ToText(nn.Module):
     def forward(self,x):
         x = self.m(self.rels(self.fs_init(x)))
         x = x.reshape(2,1,4,-1)
-        for i in range(self.depth):
-            f1 = self.convs[i]
-            f2 = self.bns[i]
-            x = f1(x)
-            x = f2(x)
+        x = self.bn0(self.conv0(x))
+        x = self.bn1(self.conv1(x))
+        x = self.bn2(self.conv2(x))
+        x = self.bn3(self.conv3(x))
+        x = self.bn4(self.conv4(x))
         x = x.reshape(32,4,-1)
         x = self.m(self.rels(self.fs_3(x)))
         x = x.reshape(67,4,-1)
@@ -194,21 +213,18 @@ class Decoder(nn.Module):
         super(Decoder,self).__init__()
         self.bn = batch_size
         # convolution layers
-        conv1 = nn.Conv2d(1,4,3,padding=1,stride=1)
-        conv2 = nn.Conv2d(4,8,3,padding=1,stride=1)
-        conv3 = nn.Conv2d(8,16,3,padding=1,stride=1)
-        conv4 = nn.Conv2d(16,32,3,padding=1,stride=1)
-        conv5 = nn.Conv2d(32,64,3,padding=1,stride=1)
-        self.list_convs = [conv1, conv2, conv3, conv4, conv5]
+        self.conv1 = nn.Conv2d(1,4,3,padding=1,stride=1).to(device)
+        self.conv2 = nn.Conv2d(4,8,3,padding=1,stride=1).to(device)
+        self.conv3 = nn.Conv2d(8,16,3,padding=1,stride=1).to(device)
+        self.conv4 = nn.Conv2d(16,32,3,padding=1,stride=1).to(device)
+        self.conv5 = nn.Conv2d(32,64,3,padding=1,stride=1).to(device)
         # batch normalizations
-        bn1 = nn.InstanceNorm2d(4)
-        bn2 = nn.InstanceNorm2d(8)
-        bn3 = nn.InstanceNorm2d(16)
-        bn4 = nn.InstanceNorm2d(32)
-        bn5 = nn.InstanceNorm2d(64)
-        self.list_bns = [bn1, bn2, bn3, bn4, bn5]
+        self.bn1 = nn.InstanceNorm2d(4)
+        self.bn2 = nn.InstanceNorm2d(8)
+        self.bn3 = nn.InstanceNorm2d(16)
+        self.bn4 = nn.InstanceNorm2d(32)
+        self.bn5 = nn.InstanceNorm2d(64)
 
-        self.depth = len(self.list_bns)
         self.m = nn.Dropout(p=0.2)
         self.rels = nn.LeakyReLU(0.3)
 
@@ -221,13 +237,14 @@ class Decoder(nn.Module):
         self.device = device
 
     def forward(self, x):
+        x = x.to(self.device)
         x = self.m(self.rels(self.fs_init(x)))
-        x = x.reshape(self.bn, 1, -1, 62)
-        for i in range(self.depth):
-            funct1 = self.list_convs[i].to(self.device)
-            funct2 = self.list_bns[i].to(self.device)
-            x = funct1(x)
-            x = self.rels(funct2(x))
+        x = x.reshape(self.bn, 1, -1, 62).to(self.device)
+        x = self.rels(self.bn1(self.conv1(x)))
+        x = self.rels(self.bn2(self.conv2(x)))
+        x = self.rels(self.bn3(self.conv3(x)))
+        x = self.rels(self.bn4(self.conv4(x)))
+        x = self.rels(self.bn5(self.conv5(x)))
         x = x.reshape(32,4,-1)
         x = self.m(self.rels(self.fs_4(x)))
         x = self.m(self.rels(self.fs_3(x)))

@@ -1,4 +1,4 @@
-from utils import Decoder,LossMSE,Opt,Schedule,Encoder_Conv, ToText
+from utils import Decoder,Latent, LossMSE,Opt,Schedule,Encoder_Conv, ToText
 import numpy as np
 import librosa, torch, os, csv, pickle, shutil
 from tqdm import tqdm
@@ -132,15 +132,21 @@ def trainer():
     output_size = wav_source.size()[-1]
     encoder = Encoder_Conv(device=device) # encoder module
     input_size = encoder(wav_source).size()[-1]
+    latent_1 = Latent(input_size,device) # latent layers for the wav decoder
     decoder = Decoder(input_size,output_size,device=device,batch_size=batch_size) # decoder module
-    opt_1 = Opt(encoder,adam=False,learning_rate=0.01) # optimizers
-    opt_2 = Opt(decoder,learning_rate=0.01)
-    sch_1 = Schedule(opt_1,step_size=500)
-    sch_2 = Schedule(opt_2,step_size=500)
+    opt_1 = Opt(encoder,adam=False,learning_rate=0.5) # optimizers
+    opt_2 = Opt(decoder,learning_rate=0.1)
+    opt_l1 = Opt(latent_1, learning_rate=0.5)
+    sch_1 = Schedule(opt_1,step_size=100)
+    sch_2 = Schedule(opt_2,step_size=100)
+    sch_l1 = Schedule(opt_l1, step_size=100)
     output_size = txt_target.size()[-1]
+    latent_2 = Latent(input_size,device)
     text_decoder = ToText(input_size,output_size=output_size,device=device) # to_text module
+    opt_l2 = Opt(latent_2, learning_rate=0.5)
     opt_t = Opt(text_decoder,adam=False, learning_rate=0.05)
-    sch_t = Schedule(opt_t, step_size=500)
+    sch_t = Schedule(opt_t, step_size=100)
+    sch_l2 = Schedule(opt_l2,step_size=100)
 
 
     while e < epochs :
@@ -161,10 +167,6 @@ def trainer():
                 continue
             txt_target = np.load(path_txt)['arr_0'].tolist()
             wav_source = np.load(path_wav)['arr_0'].tolist()
-            #if step == 0:
-            #    std = StandardScaler()
-            #std_wav = std.fit(wav_source)
-            #wav_source = std_wav.transform(wav_source)
             
             # split the data into batches
             tmp = batch_split(txt_target,
@@ -179,58 +181,37 @@ def trainer():
                 continue
             txt_target = torch.FloatTensor(tmp).to(device)
             wav_source = torch.FloatTensor(batch_split(wav_source)).to(device)
-            # discard the long sources
-            '''
-            if wav_source.size()[0] != txt_target.size()[0]:
-                num_discarded += 1
-                os.remove(path_txt)
-                os.remove(path_wav)
-                continue
-            '''
 
             # an STS autoencoder module
-            '''
-            if step == 0 :
-                output_size = wav_source.size()[-1]
-                encoder = Encoder_Conv(device=device) # call the models
-                decoder = Decoder(output_size,device=device,batch_size=batch_size)
-                opt_1 = Opt(encoder,adam=False,learning_rate=0.1) # optimizers
-                opt_2 = Opt(decoder,learning_rate=0.1)
-                sch_1 = Schedule(opt_1,step_size=100)
-                sch_2 = Schedule(opt_2,step_size=100)
-            '''
             opt_1.zero_grad()
             opt_2.zero_grad()
+            opt_l1.zero_grad()
             encoded_wav = encoder(wav_source)
-            encoded_wav.retain_grad()
-            decoded_wav = decoder(encoded_wav)
-            decoded_wav.retain_grad()
+            latent_output = latent_1(encoded_wav)
+            decoded_wav = decoder(latent_output.to(device))
             loss_STS = LossMSE(decoded_wav,wav_source.to(device),device,switch=True)
             loss_STS.backward()
             opt_2.step()
+            opt_l1.step()
             opt_1.step()
             
             # an STT module
-            '''
-            if step == 0:
-                output_size = txt_target.size()[-1]
-                text_decoder = ToText(output_size=output_size,device=device)
-                opt_t = Opt(text_decoder,adam=False, learning_rate=0.8)
-                sch_t = Schedule(opt_t, step_size=100)
-            '''
-            opt_1.zero_grad()
             opt_t.zero_grad()
-            encoded_wav = encoder(wav_source)
-            text_source = text_decoder(encoded_wav)
+            opt_l2.zero_grad()
+            encoded_wav = encoder(wav_source).detach()
+            latent_output = latent_2(encoded_wav)
+            text_source = text_decoder(latent_output)
             loss_STT = LossMSE(text_source,txt_target,device)
             loss_STT.backward()
             opt_t.step()
-            opt_1.step()
+            opt_l2.step()
 
             if sch_1 is not None:
                 sch_1.step()
                 sch_2.step()
                 sch_t.step()
+                sch_l1.step()
+                sch_l2.step()
             else:
                 print("The schedulers are not properly defined")
 
@@ -300,6 +281,8 @@ def trainer():
                 'encoder_state' : encoder.state_dict(),
                 'decoder_state' : decoder.state_dict(),
                 'text_decoder_state': text_decoder.state_dict(),
+                'latent_wav_state' : latent_1.state_dict(),
+                'latent_txt_state' : latent_2.state_dict(),
                 #'optimizer_state_encoder': opt_1.state_dict(),
                 #'optimizer_state_attention': opt_2.state_dict(),
                 #'optimizer_state_decoder': opt_d.state_dict(),
