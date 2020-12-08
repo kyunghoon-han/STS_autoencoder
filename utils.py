@@ -56,25 +56,25 @@ def LossMSE(x,y,device,switch=False):
     if not switch:
         loss1 = nn.L1Loss()
         l1 = loss1(x,y)
-        loss2 = nn.CosineSimilarity(dim=0, eps=1e-6)
+        loss2 = nn.CosineSimilarity(dim=-1, eps=1e-6)
         l2 = loss2(x,y).to(device)
         ones = torch.ones(l2.size()).to(device)
-        loss3 = nn.BCEWithLogitsLoss()
-        l3 = loss3(x,y)
-        return  l3 #+ torch.sqrt((ones+l2).sum()) + torch.sqrt(l1)
+        return l1 + (ones+l2).mean()
     else:
-        loss = nn.CosineSimilarity(dim=0, eps=1e-6)
+        loss = nn.CosineSimilarity(dim=-1, eps=1e-6)
         l = loss(x,y).to(device)
         ones = torch.ones(l.size()).to(device)
         loss2 = nn.L1Loss()
         l2 = loss2(x,y)
-        return (ones+l).mean() #+ torch.sqrt(l2) + torch.sqrt((ones + l).sum())
+        return l2 #+ (ones+l).mean()
 
 def Opt(model,adam=True,learning_rate=0.01):
     if adam:
-        return optim.Adam(model.parameters(),lr=learning_rate,amsgrad=True)
+        return optim.Adam(model.parameters(),
+                lr=learning_rate,weight_decay=0.0000001,amsgrad=True)
     else:
-        return optim.SGD(model.parameters(),lr=learning_rate,momentum=0.1,nesterov=True)
+        return optim.SGD(model.parameters(),
+                lr=learning_rate,momentum=0.0005,nesterov=True)
 
 def Schedule(opt,step_size=500,gamma=0.5):
     scheduler = optim.lr_scheduler.StepLR(opt, step_size=step_size, gamma=gamma)
@@ -87,10 +87,9 @@ def Schedule(opt,step_size=500,gamma=0.5):
 # ======================================
 class Encoder_Conv(nn.Module):
     # convolution-based encoder module 
-    def __init__(self,device,input_dim = 3977, output_dim=62,depth=6):
+    def __init__(self,device,input_dim = 1256, output_dim=34, hidden_size=64,num_layers=64):
         super(Encoder_Conv, self).__init__()
         self.input_dim = input_dim
-        self.depth = depth
         self.init_fc = nn.Linear(input_dim, int(round(input_dim/10))).to(device)
         self.rels = nn.LeakyReLU(0.4).to(device)
         self.device = device
@@ -102,14 +101,18 @@ class Encoder_Conv(nn.Module):
         self.conv4 = nn.Conv2d(16,32,3,padding=1,stride=2).to(device)
         self.conv5 = nn.Conv2d(32,64,3,padding=1,stride=2).to(device)
         # batch normalizations
-        self.bn0 = nn.InstanceNorm2d(1)
-        self.bn1 = nn.InstanceNorm2d(4)
-        self.bn2 = nn.InstanceNorm2d(8)
-        self.bn3 = nn.InstanceNorm2d(16)
-        self.bn4 = nn.InstanceNorm2d(32)
+        self.bn0 = nn.InstanceNorm2d(1).to(device)
+        self.bn1 = nn.InstanceNorm2d(4).to(device)
+        self.bn2 = nn.InstanceNorm2d(8).to(device)
+        self.bn3 = nn.InstanceNorm2d(16).to(device)
+        self.bn4 = nn.InstanceNorm2d(32).to(device)
         self.bn5 = nn.InstanceNorm2d(64)
+        # sprinkle of a RNN
+        self.rnn = nn.RNN(input_size=1024, hidden_size=64,num_layers=num_layers, dropout=0.3).to(device)
+        self.hidden_size=hidden_size
+        self.num_layers = num_layers
         # final output layer
-        self.final_fc = nn.Linear(3328,output_dim).to(device) # need to change this
+        self.final_fc = nn.Linear(64,output_dim).to(device) # need to change this
         self.sigs = nn.Sigmoid()
 
     def forward(self, x):
@@ -122,8 +125,10 @@ class Encoder_Conv(nn.Module):
         x = self.bn3(self.conv3(x))
         x = self.bn4(self.conv4(x))
         x = self.bn5(self.conv5(x))
-
-        x = x.reshape(2*4,-1)
+        #x = x.reshape(2*4,-1)
+        hidden = torch.zeros(self.num_layers,4,self.hidden_size).to(self.device)
+        x = x.reshape(2,4,-1)
+        x, hidden = self.rnn(x,hidden)
         x = self.final_fc(x)
         x = self.rels(x.reshape(2,4,-1))
         return x
@@ -164,7 +169,7 @@ class Latent(nn.Module):
 #
 # ======================================
 class ToText(nn.Module):
-    def __init__(self,input_size,output_size,device):
+    def __init__(self,input_size,output_size,device,hidden_size=64,num_layers=128):
         super(ToText,self).__init__()
         self.device = device
 
@@ -180,12 +185,19 @@ class ToText(nn.Module):
         self.bn4   = nn.InstanceNorm2d(128).to(device)
 
         self.fs_init = nn.Linear(input_size,input_size*2).to(device)
-        self.fs_3 = nn.Linear(992,670).to(device)
-        self.fs_2 = nn.Linear(320,180).to(device)
-        self.fs_1 = nn.Linear(180, 100).to(device)
-        self.fs = nn.Linear(100,output_size).to(device)
+        self.fs_3 = nn.Linear(64*16,17*128).to(device)
+        self.fs_2 = nn.Linear(128,64).to(device)
+        self.fs_1 = nn.Linear(64, 8).to(device)
+        self.fs = nn.Linear(8,output_size).to(device)
         self.rels = nn.LeakyReLU(0.3)
         self.m = nn.Dropout(p=0.2)
+
+        # sprinkle of a RNN
+        self.rnn = nn.RNN(input_size=544, hidden_size=64,num_layers=num_layers, dropout=0.3).to(device)
+        self.hidden_size=hidden_size
+        self.num_layers = num_layers
+ 
+
     def forward(self,x):
         x = self.m(self.rels(self.fs_init(x)))
         x = x.reshape(2,1,4,-1)
@@ -195,11 +207,14 @@ class ToText(nn.Module):
         x = self.bn3(self.conv3(x))
         x = self.bn4(self.conv4(x))
         x = x.reshape(32,4,-1)
+        hidden = torch.zeros(self.num_layers,4,self.hidden_size).to(self.device)
+        x, hidden = self.rnn(x,hidden)
+        x = x.reshape(2,4,-1)
         x = self.m(self.rels(self.fs_3(x)))
-        x = x.reshape(67,4,-1)
+        x = x.reshape(34,4,-1)
         x = self.m(self.rels(self.fs_2(x)))
         x = self.m(self.rels(self.fs_1(x)))
-        x = self.rels(self.fs(x))
+        x = self.fs(x)
 
         return x
 
@@ -209,7 +224,8 @@ class ToText(nn.Module):
 #
 # ======================================
 class Decoder(nn.Module):
-    def __init__(self, input_size, output_size, device, batch_size):
+    def __init__(self, input_size, output_size, device, 
+                batch_size,hidden_size=64,num_layers=128):
         super(Decoder,self).__init__()
         self.bn = batch_size
         # convolution layers
@@ -219,33 +235,39 @@ class Decoder(nn.Module):
         self.conv4 = nn.Conv2d(16,32,3,padding=1,stride=1).to(device)
         self.conv5 = nn.Conv2d(32,64,3,padding=1,stride=1).to(device)
         # batch normalizations
-        self.bn1 = nn.InstanceNorm2d(4)
-        self.bn2 = nn.InstanceNorm2d(8)
-        self.bn3 = nn.InstanceNorm2d(16)
-        self.bn4 = nn.InstanceNorm2d(32)
-        self.bn5 = nn.InstanceNorm2d(64)
+        self.bn1 = nn.BatchNorm2d(4).to(device)
+        self.bn2 = nn.BatchNorm2d(8).to(device)
+        self.bn3 = nn.BatchNorm2d(16).to(device)
+        self.bn4 = nn.BatchNorm2d(32).to(device)
+        self.bn5 = nn.BatchNorm2d(64).to(device)
 
         self.m = nn.Dropout(p=0.2)
         self.rels = nn.LeakyReLU(0.3)
 
+        self.rnn = nn.RNN(input_size=272, hidden_size=64,num_layers=num_layers, dropout=0.3).to(device)
+        self.hidden_size=hidden_size
+        self.num_layers = num_layers
+
         self.fs_init = nn.Linear(input_size,input_size*2).to(device)
-        self.fs_4 = nn.Linear(496,600).to(device)
-        self.fs_3 = nn.Linear(600,1000).to(device)
-        self.fs_2 = nn.Linear(1000,1500).to(device)
-        self.fs_1 = nn.Linear(1500,2000).to(device)
-        self.fs = nn.Linear(2000,output_size).to(device)
+        self.fs_4 = nn.Linear(64,128).to(device)
+        self.fs_3 = nn.Linear(128,400).to(device)
+        self.fs_2 = nn.Linear(400,800).to(device)
+        self.fs_1 = nn.Linear(800,1600).to(device)
+        self.fs = nn.Linear(1600,output_size).to(device)
         self.device = device
 
     def forward(self, x):
         x = x.to(self.device)
         x = self.m(self.rels(self.fs_init(x)))
-        x = x.reshape(self.bn, 1, -1, 62).to(self.device)
+        x = x.reshape(self.bn, 1, -1, 34).to(self.device)
         x = self.rels(self.bn1(self.conv1(x)))
         x = self.rels(self.bn2(self.conv2(x)))
         x = self.rels(self.bn3(self.conv3(x)))
         x = self.rels(self.bn4(self.conv4(x)))
         x = self.rels(self.bn5(self.conv5(x)))
         x = x.reshape(32,4,-1)
+        hidden = torch.zeros(self.num_layers,4,self.hidden_size).to(self.device)
+        x, hidden = self.rnn(x,hidden)
         x = self.m(self.rels(self.fs_4(x)))
         x = self.m(self.rels(self.fs_3(x)))
         x = self.m(self.rels(self.fs_2(x)))

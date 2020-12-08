@@ -88,6 +88,7 @@ def wav_list_from_data_dict_result(data_dict_result,directory = './preprocessed'
                     sentence = sentence_to_decomposition(sentence)
                     txt_max = len(sentence)
 
+    print('the maximum text length is :', txt_max)
     counter = 0
     sp_num = 0
     list_datapairs = []
@@ -110,21 +111,22 @@ def wav_list_from_data_dict_result(data_dict_result,directory = './preprocessed'
                     wav = np.array(wav)
 
                 sentence = sentence_to_decomposition(sentence)
-                if len(sentence) < txt_max:
+                if len(sentence) < txt_max + 4:
                     diff_length = txt_max - len(sentence)
-                    sentence = sentence + '*'*(diff_length+3)
-                
+                    sentence = sentence + '*'*(diff_length+4)
+                elif len(sentence) > txt_max:
+                    continue
                 # obtain the MEL and save the array to the respective file
                 mel = librosa.feature.melspectrogram(y=wav, sr=sr)
-                mel_db = mel #librosa.power_to_db(mel, ref=np.max) # to db scale
+                mel_db = librosa.power_to_db(mel, ref=np.max) # to db scale
                 if not os.path.isdir(directory):
                     os.mkdir(directory)
                 np.savez(wav_filename, mel_db)
                 # encode the sentence
                 if counter == 0:
-                    encoded_sentence, hangul_dict = sentence2vec(sentence,vec=True)
+                    encoded_sentence, hangul_dict = sentence2vec(sentence,vec=False)
                 else:
-                    encoded_sentence, hangul_dict = sentence2vec(sentence, hangul_dict=hangul_dict,vec=True)
+                    encoded_sentence, hangul_dict = sentence2vec(sentence, hangul_dict=hangul_dict,vec=False)
 
                 np.savez(txt_filename, encoded_sentence)
                 counter = counter + 1 # update the counter
