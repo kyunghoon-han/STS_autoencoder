@@ -54,19 +54,17 @@ def read_encoded_data(path,filename_pair):
 # ======================================
 def LossMSE(x,y,device,switch=False):
     if not switch:
-        loss1 = nn.L1Loss()
-        l1 = loss1(x,y)
-        loss2 = nn.CosineSimilarity(dim=-1, eps=1e-6)
+        #loss1 = nn.MSELoss()
+        #l1 = loss1(x,y)
+        loss2 = nn.BCEWithLogitsLoss()
         l2 = loss2(x,y).to(device)
-        ones = torch.ones(l2.size()).to(device)
-        return l1 + (ones+l2).mean()
+        return l2
     else:
-        loss = nn.CosineSimilarity(dim=-1, eps=1e-6)
+        loss = nn.BCEWithLogitsLoss()
         l = loss(x,y).to(device)
-        ones = torch.ones(l.size()).to(device)
-        loss2 = nn.L1Loss()
+        loss2 = nn.MSELoss()
         l2 = loss2(x,y)
-        return l2 #+ (ones+l).mean()
+        return l2 + l
 
 def Opt(model,adam=True,learning_rate=0.01):
     if adam:
@@ -169,7 +167,7 @@ class Latent(nn.Module):
 #
 # ======================================
 class ToText(nn.Module):
-    def __init__(self,input_size,output_size,device,hidden_size=64,num_layers=128):
+    def __init__(self,input_size,output_size,device,hidden_size=64,num_layers=32):
         super(ToText,self).__init__()
         self.device = device
 
@@ -225,7 +223,7 @@ class ToText(nn.Module):
 # ======================================
 class Decoder(nn.Module):
     def __init__(self, input_size, output_size, device, 
-                batch_size,hidden_size=64,num_layers=128):
+                batch_size,hidden_size=64,num_layers=120):
         super(Decoder,self).__init__()
         self.bn = batch_size
         # convolution layers

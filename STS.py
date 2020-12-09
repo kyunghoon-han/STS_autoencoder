@@ -28,8 +28,11 @@ def open_list_pairs(path=path_list_pairs):
 batch_size = 4
 epochs = 1000
 num_test = 100
-lr_stt = 0.00001
-lr_sts = 0.00001
+lr_stt = 0.05
+lr_sts = 0.001
+step_lrsts = 200
+step_lrstt = 10
+verbose = 15
 # ==================================
 
 def batch_split(lst,batch_size=batch_size, is_txt=False, dict_val=None):
@@ -140,16 +143,16 @@ def trainer():
     opt_1 = Opt(encoder,learning_rate=lr_sts) # optimizers
     opt_2 = Opt(decoder,learning_rate=lr_sts)
     opt_l1 = Opt(latent_1, learning_rate=lr_sts)
-    sch_1 = Schedule(opt_1,step_size=lr_stt)
-    sch_2 = Schedule(opt_2,step_size=1000)
-    sch_l1 = Schedule(opt_l1, step_size=1000)
+    sch_1 = Schedule(opt_1,step_size=lr_sts)
+    sch_2 = Schedule(opt_2,step_size=step_lrsts)
+    sch_l1 = Schedule(opt_l1, step_size=step_lrsts)
     output_size = txt_target.size()[-1]
     latent_2 = Latent(input_size,device)
     text_decoder = ToText(latent_size,output_size=1,device=device) # to_text module
     opt_l2 = Opt(latent_2, learning_rate=lr_stt)
     opt_t = Opt(text_decoder,learning_rate=lr_stt)
-    sch_t = Schedule(opt_t, step_size=1000)
-    sch_l2 = Schedule(opt_l2,step_size=1000)
+    sch_t = Schedule(opt_t, step_size=step_lrstt)
+    sch_l2 = Schedule(opt_l2,step_size=step_lrstt)
 
 
     while e < epochs :
@@ -171,7 +174,9 @@ def trainer():
                 continue
             txt_target = np.load(path_txt)['arr_0'].tolist()
             wav_source = np.load(path_wav)['arr_0'].tolist()
-            
+            txt_target = librosa.util.normalize(txt_target)
+            wav_source = librosa.util.normalize(wav_source)
+
             # split the data into batches
             tmp = batch_split(txt_target,
                     is_txt=True,
@@ -200,7 +205,7 @@ def trainer():
             loss_STS.backward()
             opt_2.step()
             opt_l1.step()
-            # Generative training
+            # Latent module training
             opt_1.zero_grad()
             encoded_wav = encoder(wav_source)
             latent_output = latent_1(encoded_wav)
@@ -212,18 +217,16 @@ def trainer():
             #
             # an STT module
             #
-
-            # Discriminative training (ignore the encoder)
+            # Discriminative training
             opt_t.zero_grad()
             encoded_wav = encoder(wav_source).detach()
-            latent_output = latent_2(encoded_wav).detach()
+            latent_output = latent_2(encoded_wav)
             text_source = text_decoder(latent_output)
             text_source = text_source.reshape(txt_target.size())
             loss_STT = LossMSE(text_source,txt_target,device)
             loss_STT.backward()
             opt_t.step()
-
-            # Generative training
+            # Latent module training
             opt_l2.zero_grad()
             encoded_wav = encoder(wav_source).detach()
             latent_output = latent_2(encoded_wav)
@@ -232,6 +235,7 @@ def trainer():
             loss_STT = LossMSE(text_source,txt_target,device)
             loss_STT.backward()
             opt_l2.step()
+
 
             if sch_1 is not None:
                 sch_1.step()
@@ -245,7 +249,7 @@ def trainer():
 
             loss = loss_STS + loss_STT
 
-            if step % 250 == 7:
+            if step % verbose == 7:
                 string_out = "At step %i, the loss is %.4f" % (step, loss)
                 print(string_out)
                 string_out = "with the STT loss %.4f, STS loss %.4f" % (loss_STT, loss_STS)
@@ -281,8 +285,8 @@ def trainer():
             #if wav_source.size()[0] != txt_target.size()[0]:
             #    continue
             # just to make sure the the input values are floats
-            txt_target = txt_target.float()
-            wav_source = wav_source.float()
+            txt_target = librosa.util.normalize(txt_target.float())
+            wav_source = librosa.util.normalize(wav_source.float())
             #STT
             encoded_wav = encoder(wav_source)
             txt_source = text_decoder(encoded_wav)
