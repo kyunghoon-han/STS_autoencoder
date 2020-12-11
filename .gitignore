@@ -1,6 +1,7 @@
 *.npz
 *.wav
 *.pt
+.DS_Store
 ./preprocessing_unit/preprocessed
 ./preprocessing_unit/data
 __pychache__

@@ -132,20 +132,28 @@ def trainer():
     txt_target = torch.FloatTensor(batch_split(txt_target,
                                     is_txt=True,
                                     dict_val=dict_txt)).to(device)
+    print(txt_target.size())
+    exit()
     wav_source = torch.FloatTensor(batch_split(wav_source)).to(device) 
     output_size = wav_source.size()[-1]
     encoder = Encoder_Conv(device=device) # encoder module
+    text_encoder = TEncoder_Conv(device=device) # text encoder module
     input_size = encoder(wav_source).size()[-1]
     latent_1 = Latent(input_size,device) # latent layers for the wav decoder
     l_out = latent_1(encoder(wav_source))
     latent_size = l_out.size()[-1]
     decoder = Decoder(latent_size,output_size,device=device,batch_size=batch_size) # decoder module
-    opt_1 = Opt(encoder,learning_rate=lr_sts) # optimizers
+    # Optimizers 
+    opt_1 = Opt(encoder,learning_rate=lr_sts)
+    opt_te = Opt(text_encoder,learning_rate=lr_stt) 
     opt_2 = Opt(decoder,learning_rate=lr_sts)
     opt_l1 = Opt(latent_1, learning_rate=lr_sts)
+    # Schedulers
     sch_1 = Schedule(opt_1,step_size=lr_sts)
+    sch_te = Schedule(opt_te,step_size=lr_stt)
     sch_2 = Schedule(opt_2,step_size=step_lrsts)
     sch_l1 = Schedule(opt_l1, step_size=step_lrsts)
+    # optimizers and schedulers for the text_decoder and the second latent network
     output_size = txt_target.size()[-1]
     latent_2 = Latent(input_size,device)
     text_decoder = ToText(latent_size,output_size=1,device=device) # to_text module
