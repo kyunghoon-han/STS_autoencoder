@@ -124,9 +124,9 @@ def wav_list_from_data_dict_result(data_dict_result,directory = './preprocessed'
                 np.savez(wav_filename, mel_db)
                 # encode the sentence
                 if counter == 0:
-                    encoded_sentence, hangul_dict = sentence2vec(sentence,vec=False)
+                    encoded_sentence, hangul_dict = sentence2vec(sentence,vec=True)
                 else:
-                    encoded_sentence, hangul_dict = sentence2vec(sentence, hangul_dict=hangul_dict,vec=False)
+                    encoded_sentence, hangul_dict = sentence2vec(sentence, hangul_dict=hangul_dict,vec=True)
 
                 np.savez(txt_filename, encoded_sentence)
                 counter = counter + 1 # update the counter
