@@ -32,6 +32,7 @@ lr_stt = 0.05
 lr_tts = 0.01
 step_lrtts = 200
 step_lrstt = 10
+STS_threshold = 100
 verbose = 500
 # ==================================
 
@@ -207,38 +208,109 @@ def trainer():
             txt_target = torch.FloatTensor(tmp).to(device)
             wav_source = torch.FloatTensor(batch_split(wav_source)).to(device)
 
-            #
-            # First train an TTS module
-            #
-            opt_1.zero_grad()
-            opt_2.zero_grad()
-            opt_l1.zero_grad()
-            encoded_wav = encoder(wav_source)
-            encoded_txt = text_encoder(txt_target).detach()
-            latent_wav = latent_1(encoded_wav)
-            latent_txt = latent_2(encoded_txt).detach()
-            decoded_wav, loss_STT = decoder(latent_wav.to(device),
-                                            latent_txt, txt_target)
-            loss_STT.backward()
-            opt_2.step()
-            opt_l1.step()
-            opt_1.step()
-            #
-            # then train an STT module
-            #
-            opt_te.zero_grad()
-            opt_t.zero_grad()
-            opt_l2.zero_grad()
-            encoded_wav = encoder(wav_source).detach()
-            encoded_txt = text_encoder(txt_target)
-            latent_wav = latent_1(encoded_wav).detach()
-            latent_txt = latent_2(encoded_txt)
-            decoded_wav, loss_TTS = text_decoder(latent_txt.to(device),
-                                                latent_wav,wav_source)
-            loss_TTS.backward()
-            opt_t.step()
-            opt_te.step()
-            opt_l2.step()
+
+            if e < STS_threshold:
+                #
+                # First train an STT module
+                #
+                opt_1.zero_grad()
+                opt_2.zero_grad()
+                opt_l1.zero_grad()
+                encoded_wav = encoder(wav_source)
+                encoded_txt = text_encoder(txt_target).detach()
+                latent_wav = latent_1(encoded_wav)
+                latent_txt = latent_2(encoded_txt).detach()
+                decoded_wav, loss_STT = decoder(latent_wav.to(device),
+                        latent_txt, txt_target)
+                loss_STT.backward()
+                opt_2.step()
+                opt_l1.step()
+                opt_1.step()
+                #
+                # then train an TTS module
+                #
+                opt_te.zero_grad()
+                opt_t.zero_grad()
+                opt_l2.zero_grad()
+                encoded_wav = encoder(wav_source).detach()
+                encoded_txt = text_encoder(txt_target)
+                latent_wav = latent_1(encoded_wav).detach()
+                latent_txt = latent_2(encoded_txt)
+                decoded_wav, loss_TTS = text_decoder(latent_txt.to(device),
+                        latent_wav,wav_source)
+                loss_TTS.backward()
+                opt_t.step()
+                opt_te.step()
+                opt_l2.step()
+            else:
+                # get the fake stuff
+                encoded_wav = encoder(wav_source).detach()
+                encoded_txt = text_encoder(txt_target).detach()
+                latent_wav = latent_1(encoded_wav).detach()
+                latent_txt = latent_2(encoded_txt).detach()
+                txt_fake, _ = decoder(latent_wav.to(device),
+                        latent_txt, txt_target,backprop=False)
+                wav_fake, _ = text_decoder(latent_txt.to(device),
+                        latent_wav,wav_source,backprop=False)
+                txt_fake = txt_fake.detach()
+                wav_fake = wav_fake.detach()
+                # now to TTT module
+                opt_t.zero_grad()
+                opt_te.zero_grad()
+                opt_l2.zero_grad()
+                encoded_wav = encoder(wav_source).detach()
+                encoded_txt = text_encoder(txt_target)
+                latent_wav = latent_1(encoded_wav).detach()
+                latent_txt = latent_2(encoded_txt)
+                decoded_text, loss_TTS = text_decoder(latent_txt.to(device),
+                        latent_wav, wav_fake)
+                loss_TTS.backward()
+                tts_tmp = loss_TTS.item()
+                opt_t.step()
+                opt_te.step()
+                opt_l2.step()
+                opt_1.zero_grad()
+                opt_2.zero_grad()
+                opt_l1.zero_grad()
+                decoded_text = decoded_text.detach()
+                post_wav = latent_1(encoder(decoded_text))
+                latent_txt = latent_2(text_encoder(txt_target))
+                decoded_wav, loss_STT = decoder(post_wav,
+                        latent_txt,
+                        txt_target)
+                loss_STT.backward()
+                decoded_wav = decoded_wav.detach()
+                stt_tmp = loss_STT.item()
+                opt_1.step()
+                opt_2.step()
+                opt_l1.step()
+                # now to STS module
+                opt_1.zero_grad()
+                opt_2.zero_grad()
+                opt_l1.zero_grad()
+                encoded_wav = encoder(wav_source)
+                encoded_txt = text_encoder(txt_target).detach()
+                latent_txt = latent_2(encoded_txt).detach()
+                latent_wav = latent_1(encoded_wav)
+                decoded_wav, loss_STT = decoder(latent_wav,latent_txt,txt_fake)
+                loss_STT.backward()
+                opt_1.step()
+                opt_2.step()
+                opt_l1.step()
+                opt_1.zero_grad()
+                opt_2.zero_grad()
+                opt_l1.zero_grad()
+                decoded_wav = decoded_wav.detach()
+                post_txt = latent_1(text_encoder(decoded_wav))
+                latent_wav = latent_wav.detach()
+                decoded_txt, loss_TTS = text_decoder(post_txt,latent_wav,wav_source)
+                loss_TTS.backward()
+                opt_1.step()
+                opt_2.step()
+                opt_l1.step()
+
+                loss_STT = 0.5*(loss_STT.item() + stt_tmp)
+                loss_TTS = 0.5*(loss_TTS.item() + tts_tmp)
 
             if sch_1 is not None:
                 sch_1.step()
@@ -318,6 +390,7 @@ def trainer():
             torch.save({
                 'epoch' : e,
                 'encoder_state' : encoder.state_dict(),
+                'text_encoder_state': text_encoder.state_dict(),
                 'decoder_state' : decoder.state_dict(),
                 'text_decoder_state': text_decoder.state_dict(),
                 'latent_wav_state' : latent_1.state_dict(),

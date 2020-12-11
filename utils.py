@@ -283,7 +283,7 @@ class TDecoder(nn.Module):
         self.fl2 = nn.Linear(68,680).to(device)
         self.fl3 = nn.Linear(680,1256).to(device)
 
-    def forward(self, x, encoded_counterpart, target_tensor):
+    def forward(self, x, encoded_counterpart, target_tensor, backprop=True):
         loss = 0.0
         for a in range(self.bn):
             if a == 0:
@@ -293,13 +293,18 @@ class TDecoder(nn.Module):
             y = y.reshape(32,-1)
             y = self.rels(self.fl2(y))
             y = self.fl3(y)
-            crit = Criterion(y, target_tensor[:,a,:],self.device,switch=True)
-            loss += crit
+            if backprop:
+                crit = Criterion(y, target_tensor[:,a,:],self.device,switch=True)
+                loss += crit
             if a == 0:
                 output_stuff = y
+                s = y.size()
+                output_stuff = output_stuff.reshape(s[0],1,s[-1])
             else:
-                output_stuff = torch.cat((output_stuff, y),0)
-        loss = loss / self.bn
+                y = y.reshape(y.size()[0],1,y.size()[-1])
+                output_stuff = torch.cat((output_stuff, y),1)
+        if backprop:
+            loss = loss / self.bn
 
         return output_stuff, loss
 # ======================================
@@ -318,7 +323,7 @@ class Decoder(nn.Module):
         self.fl1 = nn.Linear(34,34*34).to(device)
         self.fl2 = nn.Linear(68,62).to(device)
 
-    def forward(self, x, encoded_counterpart, target_tensor):
+    def forward(self, x, encoded_counterpart, target_tensor,backprop=True):
         loss = 0.0
         for a in range(self.bn):
             if a == 0:
@@ -327,13 +332,18 @@ class Decoder(nn.Module):
             y = self.rels(self.fl1(y))
             y = y.reshape(34,-1)
             y = self.fl2(y)
-            crit = Criterion(y, target_tensor[:,a,:],
+            if backprop:
+                crit = Criterion(y, target_tensor[:,a,:],
                             self.device,switch=False)
-            loss += crit
+                loss += crit
             if a == 0:
                 output_stuff = y
+                s = output_stuff.size()
+                output_stuff = output_stuff.reshape(s[0],1,s[-1])
             else:
-                output_stuff = torch.cat((output_stuff, y),0)
-        loss = loss / self.bn
+                y = y.reshape(y.size()[0],1,y.size()[-1])
+                output_stuff = torch.cat((output_stuff, y),1)
+        if backprop:
+            loss = loss / self.bn
 
         return output_stuff, loss
