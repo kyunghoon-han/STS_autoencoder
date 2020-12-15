@@ -11,11 +11,11 @@ import torch.nn.functional as F
 # ======================================
 def Criterion(x,y,device,switch=False):
     if not switch:
-        #loss1 = nn.MSELoss()
-        #l1 = loss1(x,y)
-        loss2 = nn.BCEWithLogitsLoss()
+        loss1 = nn.MSELoss()
+        l1 = loss1(x,y)
+        loss2 = nn.BCELoss()
         l2 = loss2(x,y).to(device)
-        return l2
+        return l2 + l1
     else:
         #loss = nn.BCEWithLogitsLoss()
         #l = loss(x,y).to(device)
@@ -42,10 +42,11 @@ def Schedule(opt,step_size=500,gamma=0.5):
 # ======================================
 class Encoder_Conv(nn.Module):
     # convolution-based encoder module 
-    def __init__(self,device,input_dim = 1256, output_dim=34, hidden_size=64,num_layers=64):
+    def __init__(self,device,input_dim = 1256, output_dim=128, hidden_size=8,num_layers=2,batch_size=64):
         super(Encoder_Conv, self).__init__()
         self.input_dim = input_dim
-        self.init_fc = nn.Linear(input_dim, int(round(input_dim/10))).to(device)
+        self.batch_size = batch_size
+        self.init_fc = nn.Linear(input_dim, output_dim).to(device)
         self.rels = nn.LeakyReLU(0.4).to(device)
         self.device = device
         # convolution layers
@@ -56,14 +57,14 @@ class Encoder_Conv(nn.Module):
         self.conv4 = nn.Conv2d(16,32,3,padding=1,stride=2).to(device)
         self.conv5 = nn.Conv2d(32,64,3,padding=1,stride=2).to(device)
         # batch normalizations
-        self.bn0 = nn.InstanceNorm2d(1).to(device)
-        self.bn1 = nn.InstanceNorm2d(4).to(device)
-        self.bn2 = nn.InstanceNorm2d(8).to(device)
-        self.bn3 = nn.InstanceNorm2d(16).to(device)
-        self.bn4 = nn.InstanceNorm2d(32).to(device)
-        self.bn5 = nn.InstanceNorm2d(64)
+        self.bn0 = nn.BatchNorm2d(1).to(device)
+        self.bn1 = nn.BatchNorm2d(4).to(device)
+        self.bn2 = nn.BatchNorm2d(8).to(device)
+        self.bn3 = nn.BatchNorm2d(16).to(device)
+        self.bn4 = nn.BatchNorm2d(32).to(device)
+        self.bn5 = nn.BatchNorm2d(64).to(device)
         # sprinkle of a RNN
-        self.rnn = nn.RNN(input_size=1024, hidden_size=64,num_layers=num_layers, dropout=0.3).to(device)
+        self.rnn = nn.RNN(input_size=64, hidden_size=64,num_layers=num_layers, dropout=0.3).to(device)
         self.hidden_size=hidden_size
         self.num_layers = num_layers
         # final output layer
@@ -73,7 +74,7 @@ class Encoder_Conv(nn.Module):
     def forward(self, x):
         x = x.to(self.device)
         x = self.rels(self.init_fc(x))
-        x = x.view(x.size()[0],1,4,-1).to(self.device)#int(round(self.input_dim))).to(device)
+        x = x.view(x.size()[0],1,self.batch_size,-1).to(self.device)#int(round(self.input_dim))).to(device)
         x = self.bn0(self.conv0(x))
         x = self.bn1(self.conv1(x))
         x = self.bn2(self.conv2(x))
@@ -81,11 +82,11 @@ class Encoder_Conv(nn.Module):
         x = self.bn4(self.conv4(x))
         x = self.bn5(self.conv5(x))
         #x = x.reshape(2*4,-1)
-        hidden = torch.zeros(self.num_layers,4,self.hidden_size).to(self.device)
-        x = x.reshape(2,4,-1)
+        hidden = torch.zeros(self.num_layers,self.hidden_size,self.batch_size).to(self.device)
+        x = x.reshape(2,-1,self.batch_size)
         x, hidden = self.rnn(x,hidden)
         x = self.final_fc(x)
-        x = self.rels(x.reshape(2,4,-1))
+        x = self.rels(x.reshape(self.batch_size,2,-1))
         return x
 
     def num_flat_features(self,x):
@@ -102,7 +103,7 @@ class Encoder_Conv(nn.Module):
 # ======================================
 class TEncoder(nn.Module):
     # RNN-based text encoder module
-    def __init__(self,device,input_dim = 62, output_dim=34, hidden_size=10,num_layers=5):
+    def __init__(self,device,input_dim = 62, output_dim=128, hidden_size=10,num_layers=5,batch_size=64):
         super(TEncoder, self).__init__()
         self.input_dim = input_dim
         self.init_fc = nn.Linear(input_dim, 31).to(device)
@@ -112,17 +113,20 @@ class TEncoder(nn.Module):
         self.rnn = nn.RNN(input_size=31, hidden_size=hidden_size,num_layers=num_layers, dropout=0.3).to(device)
         self.hidden_size=hidden_size
         self.num_layers = num_layers
+        self.batch_size = batch_size
         # final output layer
-        self.final_2 = nn.Linear(170, 90).to(device)
-        self.final_1 = nn.Linear(90,45).to(device)
-        self.final_fc = nn.Linear(45,output_dim).to(device) # need to change this
+        self.final_2 = nn.Linear(15, 40).to(device)
+        self.final_1 = nn.Linear(40,80).to(device)
+        self.final_fc = nn.Linear(80,output_dim).to(device) # need to change this
         self.sigs = nn.Sigmoid()
     def forward(self, x):
         x = x.to(self.device)
         x = self.rels(self.init_fc(x))
-        hidden = torch.zeros(self.num_layers,4,self.hidden_size).to(self.device)
+        hidden = torch.zeros(self.num_layers,
+                            self.batch_size,
+                            self.hidden_size).to(self.device)
         x, hidden = self.rnn(x,hidden)
-        x = x.reshape(2,4,-1)
+        x = x.reshape(self.batch_size,2,-1)
         x = self.rels(self.final_2(x))
         x = self.rels(self.final_1(x))
         x = self.final_fc(x)
@@ -138,10 +142,30 @@ class Latent(nn.Module):
         super(Latent,self).__init__()
         self.rels = nn.LeakyReLU(0.3)
         self.f1 = nn.Linear(input_size,input_size*2).to(device)
+        self.f2 = nn.Linear(input_size * 2, input_size * 3).to(device)
+        self.f3 = nn.Linear(input_size * 3, input_size * 4).to(device)
+        self.f4 = nn.Linear(input_size*4, input_size*8).to(device)
+
+    def forward(self,x):
+        x = self.rels(self.f1(x))
+        x = self.rels(self.f2(x))
+        x = self.rels(self.f3(x))
+        x = self.rels(self.f4(x))
+        return x
+
+class TLatent(nn.Module):
+    def __init__(self, input_size,device):
+        super(TLatent,self).__init__()
+        self.rels = nn.LeakyReLU(0.3)
+        self.f1 = nn.Linear(input_size,input_size*2).to(device)
+        self.f2 = nn.Linear(input_size * 2, input_size * 3).to(device)
+        self.f3 = nn.Linear(input_size * 3, input_size * 2).to(device)
         self.f4 = nn.Linear(input_size*2, input_size).to(device)
 
     def forward(self,x):
         x = self.rels(self.f1(x))
+        x = self.rels(self.f2(x))
+        x = self.rels(self.f3(x))
         x = self.rels(self.f4(x))
         return x
 
@@ -226,11 +250,11 @@ class ToText(nn.Module):
         self.conv2 = nn.Conv2d(16,32,3,padding=1, stride=1).to(device)
         self.conv3 = nn.Conv2d(32,64,3, padding=1, stride=1).to(device)
         self.conv4 = nn.Conv2d(64,128,3,padding=1,stride=1).to(device)
-        self.bn0   = nn.InstanceNorm2d(4).to(device)
-        self.bn1   = nn.InstanceNorm2d(16).to(device)
-        self.bn2   = nn.InstanceNorm2d(32).to(device)
-        self.bn3   = nn.InstanceNorm2d(64).to(device)
-        self.bn4   = nn.InstanceNorm2d(128).to(device)
+        self.bn0   = nn.BatchNorm2d(4).to(device)
+        self.bn1   = nn.BatchNorm2d(16).to(device)
+        self.bn2   = nn.BatchNorm2d(32).to(device)
+        self.bn3   = nn.BatchNorm2d(64).to(device)
+        self.bn4   = nn.BatchNorm2d(128).to(device)
 
         self.fs_init = nn.Linear(input_size,input_size*2).to(device)
         self.fs_3 = nn.Linear(64*16,17*128).to(device)
@@ -239,6 +263,7 @@ class ToText(nn.Module):
         self.fs = nn.Linear(8,output_size).to(device)
         self.rels = nn.LeakyReLU(0.3)
         self.m = nn.Dropout(p=0.2)
+        self.sigs = nn.Sigmoid()
 
         # sprinkle of a RNN
         self.rnn = nn.RNN(input_size=544, hidden_size=64,num_layers=num_layers, dropout=0.3).to(device)
@@ -272,16 +297,15 @@ class ToText(nn.Module):
 #
 # ======================================
 class TDecoder(nn.Module):
-    def __init__(self, input_size, batch_size, device, 
+    def __init__(self, input_size,output_size, batch_size, device, 
                 hidden_size=124,num_layers=120):
         super(TDecoder,self).__init__()
         self.bn = batch_size
         self.rels = nn.LeakyReLU(0.2)
         self.device = device
         self.attention = LocationAwareAttention(d_model=input_size).to(device)
-        self.fl1 = nn.Linear(34,34*32).to(device)
-        self.fl2 = nn.Linear(68,680).to(device)
-        self.fl3 = nn.Linear(680,1256).to(device)
+        self.fl1 = nn.Linear(128,64).to(device)
+        self.fl3 = nn.Linear(2048,output_size).to(device)
 
     def forward(self, x, encoded_counterpart, target_tensor, backprop=True):
         loss = 0.0
@@ -290,8 +314,7 @@ class TDecoder(nn.Module):
                 lat = None
             y, lat = self.attention(x, encoded_counterpart,lat)
             y = self.rels(self.fl1(y))
-            y = y.reshape(32,-1)
-            y = self.rels(self.fl2(y))
+            y = y.reshape(2,-1)
             y = self.fl3(y)
             if backprop:
                 crit = Criterion(y, target_tensor[:,a,:],self.device,switch=True)
@@ -313,15 +336,19 @@ class TDecoder(nn.Module):
 #
 # ======================================
 class Decoder(nn.Module):
-    def __init__(self, input_size, batch_size, device, 
+    def __init__(self, input_size, output_size, batch_size, device, 
                 hidden_size=124,num_layers=120):
         super(Decoder,self).__init__()
         self.bn = batch_size
         self.rels = nn.LeakyReLU(0.2)
         self.device = device
         self.attention = LocationAwareAttention(d_model=input_size).to(device)
-        self.fl1 = nn.Linear(34,34*34).to(device)
-        self.fl2 = nn.Linear(68,62).to(device)
+        self.fl1 = nn.Linear(128,63).to(device)
+        self.fl2 = nn.Linear(1344,650).to(device)
+        self.fl3 = nn.Linear(650,325).to(device)
+        self.fl4 = nn.Linear(325,160).to(device)
+        self.fl5 = nn.Linear(160,output_size).to(device)
+        self.sigs = nn.Sigmoid()
 
     def forward(self, x, encoded_counterpart, target_tensor,backprop=True):
         loss = 0.0
@@ -330,8 +357,11 @@ class Decoder(nn.Module):
                 lat = None
             y, lat = self.attention(x, encoded_counterpart,lat)
             y = self.rels(self.fl1(y))
-            y = y.reshape(34,-1)
-            y = self.fl2(y)
+            y = y.reshape(3,-1)
+            y = self.rels(self.fl2(y))
+            y = self.rels(self.fl3(y))
+            y = self.rels(self.fl4(y))
+            y = self.sigs(self.fl5(y))
             if backprop:
                 crit = Criterion(y, target_tensor[:,a,:],
                             self.device,switch=False)

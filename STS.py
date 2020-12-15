@@ -1,4 +1,4 @@
-from utils import Decoder,Latent,Criterion,Opt,Schedule,Encoder_Conv, TEncoder,TDecoder
+from utils import Decoder,Latent,Criterion,Opt,Schedule,Encoder_Conv, TEncoder,TDecoder, TLatent
 import numpy as np
 import librosa, torch, os, csv, pickle, shutil, random
 from tqdm import tqdm
@@ -25,16 +25,16 @@ def open_list_pairs(path=path_list_pairs):
 
 #====================================
 # Hyperparameters 
-batch_size = 4
+batch_size = 64
 epochs = 1000
 num_test = 100
-lr_stt = 0.05
-lr_tts = 0.01
-step_lrtts = 200
+lr_stt = 0.01
+lr_tts = 0.0001
+step_lrtts = 20
 step_lrstt = 10
-STS_threshold = 100
-verbose = 500
-# ==================================
+STS_threshold = 20
+verbose = 5
+# ===================================
 
 def batch_split(lst,batch_size=batch_size, is_txt=False, dict_val=None):
     # this splits the list_data above in batches
@@ -45,14 +45,14 @@ def batch_split(lst,batch_size=batch_size, is_txt=False, dict_val=None):
         if isinstance(stuff, np.ndarray):
             stuff = np.ndarray.tolist(stuff)
 
-        if len(stuff) == 4:
+        if len(stuff) == batch_size:
             list_output.append(stuff)
-        elif len(stuff) < 4:
+        elif len(stuff) < batch_size:
             if is_txt:
-                while len(stuff) < 4:
+                while len(stuff) < batch_size:
                     stuff.append(dict_val['*'])
             else:
-                while len(stuff) < 4:
+                while len(stuff) < batch_size:
                     stuff.append(0.0)
             list_output.append(stuff)
         else:
@@ -136,21 +136,28 @@ def trainer():
             train_stuff.remove(pair)
             continue
         break
+    # target text input
     txt_target = np.load(path_txt)['arr_0'].tolist()
+    # length of the batch_devided txt input (modified again later)
+    length_txt = len(txt_target) * len(txt_target[0])
+    # source audio
     wav_source = np.load(path_wav)['arr_0'].tolist()
     txt_target = torch.FloatTensor(batch_split(txt_target,
                                     is_txt=True,
                                     dict_val=dict_txt)).to(device)
-    txt_target = text_pruner(txt_target,34)
+    # modification of the length_txt
+    length_txt = int(length_txt/(txt_target.size()[-1] * batch_size))
+    txt_target = text_pruner(txt_target,length_txt) # prune the input
     wav_source = torch.FloatTensor(batch_split(wav_source)).to(device) 
     output_size = wav_source.size()[-1]
-    encoder = Encoder_Conv(device=device) # encoder module
+    encoder = Encoder_Conv(device=device,input_dim=wav_source.size()[-1]) # encoder module
     text_encoder = TEncoder(device=device) # text encoder module
     input_size = encoder(wav_source).size()[-1]
+    output_size = txt_target.size()[-1]
     latent_1 = Latent(input_size,device) # latent layers for the wav decoder
     l_out = latent_1(encoder(wav_source))
     latent_size = l_out.size()[-1]
-    decoder = Decoder(latent_size,device=device,batch_size=batch_size) # decoder module
+    decoder = Decoder(latent_size,output_size,device=device,batch_size=batch_size) # decoder module
     # Optimizers 
     opt_1 = Opt(encoder,learning_rate=lr_tts)
     opt_te = Opt(text_encoder,learning_rate=lr_stt) 
@@ -162,9 +169,10 @@ def trainer():
     sch_2 = Schedule(opt_2,step_size=step_lrtts)
     sch_l1 = Schedule(opt_l1, step_size=step_lrtts)
     # optimizers and schedulers for the text_decoder and the second latent network
-    output_size = txt_target.size()[-1]
-    latent_2 = Latent(input_size,device)
-    text_decoder = TDecoder(latent_size,device=device,batch_size=batch_size)
+    output_size = wav_source.size()[-1]
+    input_size = text_encoder(txt_target.to(device)).size()[-1]
+    latent_2 = TLatent(input_size,device)
+    text_decoder = TDecoder(latent_size,output_size,device=device,batch_size=batch_size)
     #ToText(latent_size,output_size=txt_target.size()[-1],device=device) # to_text module
     opt_l2 = Opt(latent_2, learning_rate=lr_stt)
     opt_t = Opt(text_decoder,learning_rate=lr_stt)
@@ -177,6 +185,7 @@ def trainer():
         num_discarded = 0
         print("Epoch: ",e)
         random.shuffle(train_stuff)
+        switch_counter = 0
         for pair in tqdm(train_stuff):
             # load the data
             path_txt = os.path.join(data_dir.replace('preprocessed',''),pair[0].replace('./',''))
@@ -192,24 +201,23 @@ def trainer():
             txt_target = np.load(path_txt)['arr_0'].tolist()
             wav_source = np.load(path_wav)['arr_0'].tolist()
             #txt_target = librosa.util.normalize(txt_target)
-            #wav_source = librosa.util.normalize(wav_source)
+            wav_source = librosa.util.normalize(wav_source)
 
             # split the data into batches
             tmp = batch_split(txt_target,
                     is_txt=True,
                     dict_val=dict_txt)
-            if len(tmp) > 34:
-                tmp = tmp[:34]
-            elif len(tmp) == 34:
-                pass
-            else:
-                print('a text file is corrupted', len(tmp))
+            tmp = text_pruner(tmp,length_txt)
 
             txt_target = torch.FloatTensor(tmp).to(device)
             wav_source = torch.FloatTensor(batch_split(wav_source)).to(device)
 
+            if e > STS_threshold:
+                switch = True
+            else:
+                switch = False
 
-            if e < STS_threshold:
+            if not switch:
                 #
                 # First train an STT module
                 #
@@ -299,15 +307,15 @@ def trainer():
                 opt_l1.step()
                 opt_1.zero_grad()
                 opt_2.zero_grad()
-                opt_l1.zero_grad()
+                opt_l2.zero_grad()
                 decoded_wav = decoded_wav.detach()
-                post_txt = latent_1(text_encoder(decoded_wav))
+                post_txt = latent_2(text_encoder(decoded_wav))
                 latent_wav = latent_wav.detach()
                 decoded_txt, loss_TTS = text_decoder(post_txt,latent_wav,wav_source)
                 loss_TTS.backward()
                 opt_1.step()
                 opt_2.step()
-                opt_l1.step()
+                opt_l2.step()
 
                 loss_STT = 0.5*(loss_STT.item() + stt_tmp)
                 loss_TTS = 0.5*(loss_TTS.item() + tts_tmp)
@@ -324,13 +332,13 @@ def trainer():
 
             loss = loss_TTS + loss_STT
 
-            if step % verbose == 7:
+            if step % (verbose*100) == 0:
                 string_out = "At step %i, the loss is %.6f" % (step, loss)
                 print(string_out)
                 string_out = "with the STT loss %.6f, TTS loss %.6f" % (loss_STT, loss_TTS)
                 print(string_out)
             
-            if step % 100 == 0:
+            if step % verbose == 0:
                 string_out = "%i , %.3f, %.3f, %.3f \n" % (step, loss, loss_STT,loss_TTS)
                 f.write(string_out)
             step += 1
@@ -345,19 +353,16 @@ def trainer():
             path_wav = os.path.join(data_dir.replace('preprocessed',''),pair[1].replace('./',''))
             txt_target = np.load(path_txt)['arr_0'].tolist()
             wav_source = np.load(path_wav)['arr_0'].tolist()
+            wav_source = librosa.util.normalize(wav_source)
             #wav_source = std_wav.transform(wav_source)
             # split the data into batches
             tmp = batch_split(txt_target,
                     is_txt=True,
                     dict_val=dict_txt)
-            if len(tmp) > 34:
-                tmp = tmp[:34]
-            elif len(tmp) == 34:
-                pass
-            else:
-                print("a text file is corrupted")
-                continue
+            
             txt_target = torch.FloatTensor(tmp).to(device)
+            txt_target = text_pruner(txt_target,length_txt)
+            
             wav_source = torch.FloatTensor(batch_split(wav_source)).to(device)
             
             # obtain the outputs
@@ -366,9 +371,9 @@ def trainer():
             latent_wav = latent_1(encoded_wav)
             latent_txt = latent_2(encoded_txt).detach()
             decoded_wav, loss_STT = decoder(latent_wav.to(device),
-                                                encoded_txt,txt_target)
+                                                latent_txt,txt_target)
             decoded_wav, loss_TTS = text_decoder(latent_txt.to(device),
-                                                encoded_wav,wav_source)
+                                                latent_wav,wav_source)
             loss_1 = loss_TTS.item()
             loss_2 = loss_STT.item()
             test_TTS += loss_1

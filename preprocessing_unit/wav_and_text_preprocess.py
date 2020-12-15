@@ -18,9 +18,13 @@ def the_wavs(dir_in):
             direc = os.path.join(dirpath,direc)
             list_files = list_paths(direc)
             list_text = list_paths(direc,extension='.csv')
-            tmp_list = [direc,list_text[0],list_files]
-            list_dirs.append(tmp_list)
-
+            try:
+                tmp_list = [direc,list_text[0],list_files]
+                list_dirs.append(tmp_list)
+            except IndexError:
+                print(direc)
+                print(list_text)
+                exit()
     return list_dirs
 
 
@@ -70,7 +74,7 @@ def data_dict(file_infos):
 #
 # Read and process the WAV files
 #
-def wav_list_from_data_dict_result(data_dict_result,directory = './preprocessed',output_file_name='prep_data'):
+def wav_list_from_data_dict_result(data_dict_result,directory = './preprocessed',output_file_name='prep_data',batch_size=64):
     file_root_name = os.path.join(directory,output_file_name)
     list_tmp = []
     wav_max = 0
@@ -111,9 +115,9 @@ def wav_list_from_data_dict_result(data_dict_result,directory = './preprocessed'
                     wav = np.array(wav)
 
                 sentence = sentence_to_decomposition(sentence)
-                if len(sentence) < txt_max + 4:
+                if len(sentence) < txt_max + batch_size - 1:
                     diff_length = txt_max - len(sentence)
-                    sentence = sentence + '*'*(diff_length+4)
+                    sentence = sentence + '*'*(diff_length+batch_size-1)
                 elif len(sentence) > txt_max:
                     continue
                 # obtain the MEL and save the array to the respective file
