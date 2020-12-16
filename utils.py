@@ -302,10 +302,13 @@ class TDecoder(nn.Module):
         super(TDecoder,self).__init__()
         self.bn = batch_size
         self.rels = nn.LeakyReLU(0.2)
+        self.drops = nn.Dropout(0.1)
         self.device = device
         self.attention = LocationAwareAttention(d_model=input_size).to(device)
-        self.fl1 = nn.Linear(128,64).to(device)
-        self.fl3 = nn.Linear(2048,output_size).to(device)
+        self.fl1 = nn.Linear(128, 64).to(device)
+        self.fl2 = nn.Linear(64, 32).to(device)
+        self.fl3 = nn.Linear(1024,2048).to(device)
+        self.fl6 = nn.Linear(2048,output_size).to(device)
 
     def forward(self, x, encoded_counterpart, target_tensor, backprop=True):
         loss = 0.0
@@ -313,9 +316,11 @@ class TDecoder(nn.Module):
             if a == 0:
                 lat = None
             y, lat = self.attention(x, encoded_counterpart,lat)
-            y = self.rels(self.fl1(y))
+            y = self.drops(self.rels(self.fl1(y)))
+            y = self.drops(self.rels(self.fl2(y)))
             y = y.reshape(2,-1)
-            y = self.fl3(y)
+            y = self.drops(self.rels(self.fl3(y)))
+            y = self.fl6(y)
             if backprop:
                 crit = Criterion(y, target_tensor[:,a,:],self.device,switch=True)
                 loss += crit
@@ -342,12 +347,13 @@ class Decoder(nn.Module):
         self.bn = batch_size
         self.rels = nn.LeakyReLU(0.2)
         self.device = device
+        self.drops = nn.Dropout(0.1)
         self.attention = LocationAwareAttention(d_model=input_size).to(device)
         self.fl1 = nn.Linear(128,63).to(device)
-        self.fl2 = nn.Linear(1344,650).to(device)
-        self.fl3 = nn.Linear(650,325).to(device)
-        self.fl4 = nn.Linear(325,160).to(device)
-        self.fl5 = nn.Linear(160,output_size).to(device)
+        self.fl2 = nn.Linear(1344,672).to(device)
+        self.fl5 = nn.Linear(672,336).to(device)
+        self.fl6 = nn.Linear(336,160).to(device)
+        self.fl7 = nn.Linear(160,output_size).to(device)
         self.sigs = nn.Sigmoid()
 
     def forward(self, x, encoded_counterpart, target_tensor,backprop=True):
@@ -358,10 +364,10 @@ class Decoder(nn.Module):
             y, lat = self.attention(x, encoded_counterpart,lat)
             y = self.rels(self.fl1(y))
             y = y.reshape(3,-1)
-            y = self.rels(self.fl2(y))
-            y = self.rels(self.fl3(y))
-            y = self.rels(self.fl4(y))
-            y = self.sigs(self.fl5(y))
+            y = self.drops(self.rels(self.fl2(y)))
+            y = self.drops(self.rels(self.fl5(y)))
+            y = self.drops(self.rels(self.fl6(y)))
+            y = self.sigs(self.fl7(y))
             if backprop:
                 crit = Criterion(y, target_tensor[:,a,:],
                             self.device,switch=False)
