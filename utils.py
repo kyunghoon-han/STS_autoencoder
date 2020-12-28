@@ -1,6 +1,7 @@
 import os, csv, torch
 import numpy as np
 import torch.nn as nn
+from math import floor
 import torch.optim as optim
 import torch.nn.functional as F
 
@@ -44,10 +45,10 @@ def conv_output_size(input_tensor, stride=2,padding=1, dilation=1, kernel_size=3
     height_in = size_vector[2]
     width_in = size_vector[3]
 
-    height_out = height_in + (2 * pad) - (dil * kernel_size)
-    width_out = width_in + (2 * pad) - (dil * kernel_size)
-    height_out = torch.floor(height_out / stride)
-    width_out = torch.floor(width_in / stride)
+    height_out = height_in + (2 * padding) - (dilation * kernel_size)
+    width_out = width_in + (2 * padding) - (dilation * kernel_size)
+    height_out = floor(height_out / stride)
+    width_out = floor(width_in / stride)
     return height_out, width_out
 
 # ======================================
@@ -99,7 +100,7 @@ class Encoder_Conv(nn.Module):
         # add channel dimension and resize x so it can be used as an input
         # for a convolution layer
         x = x.view(x.size()[0],1,self.batch_size,-1).to(self.device)
-        size_conv = conv_output_size(input_tensor,stride=1)
+        size_conv = conv_output_size(x,stride=1)
         x = self.bn0(self.conv0(x))
         x = self.bn1(self.conv1(x))
         x = self.bn2(self.conv2(x))
@@ -107,7 +108,7 @@ class Encoder_Conv(nn.Module):
         x = self.bn4(self.conv4(x))
         # compute the expected size of the last conv layer
         # then pass the x through conv5
-        height_x, width_x = conv_output_size(input_tensor)
+        height_x, width_x = conv_output_size(x)
         x = self.bn5(self.conv5(x))
         # now apply RNN
         hidden = torch.zeros(self.num_layers,

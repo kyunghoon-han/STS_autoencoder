@@ -32,7 +32,7 @@ lr_stt = 0.01
 lr_tts = 0.0001
 step_lrtts = 20
 step_lrstt = 10
-STS_threshold = 5
+STS_threshold = 10
 verbose = 5
 # ===================================
 
