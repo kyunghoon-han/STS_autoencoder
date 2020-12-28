@@ -34,6 +34,21 @@ def Opt(model,adam=True,learning_rate=0.01):
 def Schedule(opt,step_size=500,gamma=0.5):
     scheduler = optim.lr_scheduler.StepLR(opt, step_size=step_size, gamma=gamma)
     return scheduler
+# ======================================
+#
+#  ENCODER MODULE
+#
+# ======================================
+def conv_output_size(input_tensor, stride=2,padding=1, dilation=1, kernel_size=3):
+    size_vector = input_tensor.size() #(batches, channel, height, width)
+    height_in = size_vector[2]
+    width_in = size_vector[3]
+
+    height_out = height_in + (2 * pad) - (dil * kernel_size)
+    width_out = width_in + (2 * pad) - (dil * kernel_size)
+    height_out = torch.floor(height_out / stride)
+    width_out = torch.floor(width_in / stride)
+    return height_out, width_out
 
 # ======================================
 #
@@ -42,7 +57,9 @@ def Schedule(opt,step_size=500,gamma=0.5):
 # ======================================
 class Encoder_Conv(nn.Module):
     # convolution-based encoder module 
-    def __init__(self,device,input_dim = 1256, output_dim=128, hidden_size=8,num_layers=2,batch_size=64):
+    def __init__(self,device,input_dim = 1256, output_dim=128, 
+                 hidden_size=8,num_layers=2,
+                 batch_size=64, last_conv_channel_size=64):
         super(Encoder_Conv, self).__init__()
         self.input_dim = input_dim
         self.batch_size = batch_size
@@ -50,12 +67,14 @@ class Encoder_Conv(nn.Module):
         self.rels = nn.LeakyReLU(0.4).to(device)
         self.device = device
         # convolution layers
+        self.last_channel = last_conv_channel_size
         self.conv0 = nn.Conv2d(1,1,3,padding=1,stride=1).to(device)
         self.conv1 = nn.Conv2d(1,4,3,padding=1,stride=2).to(device)
         self.conv2 = nn.Conv2d(4,8,3,padding=1,stride=2).to(device)
         self.conv3 = nn.Conv2d(8,16,3,padding=1,stride=2).to(device)
         self.conv4 = nn.Conv2d(16,32,3,padding=1,stride=2).to(device)
-        self.conv5 = nn.Conv2d(32,64,3,padding=1,stride=2).to(device)
+        self.conv5 = nn.Conv2d(32,last_conv_channel_size,
+                               3,padding=1,stride=2).to(device)
         # batch normalizations
         self.bn0 = nn.BatchNorm2d(1).to(device)
         self.bn1 = nn.BatchNorm2d(4).to(device)
@@ -63,8 +82,11 @@ class Encoder_Conv(nn.Module):
         self.bn3 = nn.BatchNorm2d(16).to(device)
         self.bn4 = nn.BatchNorm2d(32).to(device)
         self.bn5 = nn.BatchNorm2d(64).to(device)
-        # sprinkle of a RNN
-        self.rnn = nn.RNN(input_size=64, hidden_size=64,num_layers=num_layers, dropout=0.3).to(device)
+        # sprinkle of an RNN
+        self.rnn = nn.RNN(input_size=last_conv_channel_size, 
+                          hidden_size=last_conv_channel_size,
+                          num_layers=num_layers, 
+                          dropout=0.3).to(device)
         self.hidden_size=hidden_size
         self.num_layers = num_layers
         # final output layer
@@ -74,15 +96,23 @@ class Encoder_Conv(nn.Module):
     def forward(self, x):
         x = x.to(self.device)
         x = self.rels(self.init_fc(x))
-        x = x.view(x.size()[0],1,self.batch_size,-1).to(self.device)#int(round(self.input_dim))).to(device)
+        # add channel dimension and resize x so it can be used as an input
+        # for a convolution layer
+        x = x.view(x.size()[0],1,self.batch_size,-1).to(self.device)
+        size_conv = conv_output_size(input_tensor,stride=1)
         x = self.bn0(self.conv0(x))
         x = self.bn1(self.conv1(x))
         x = self.bn2(self.conv2(x))
         x = self.bn3(self.conv3(x))
         x = self.bn4(self.conv4(x))
+        # compute the expected size of the last conv layer
+        # then pass the x through conv5
+        height_x, width_x = conv_output_size(input_tensor)
         x = self.bn5(self.conv5(x))
-        #x = x.reshape(2*4,-1)
-        hidden = torch.zeros(self.num_layers,self.hidden_size,self.batch_size).to(self.device)
+        # now apply RNN
+        hidden = torch.zeros(self.num_layers,
+                             self.hidden_size,
+                             self.batch_size).to(self.device)
         x = x.reshape(2,-1,self.batch_size)
         x, hidden = self.rnn(x,hidden)
         x = self.final_fc(x)
