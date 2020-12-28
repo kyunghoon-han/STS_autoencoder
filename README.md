@@ -14,7 +14,6 @@ The model is constituted of 3 parts:
 I am trying to keep the model as small as possible as I expect this model to be used along with other models, not by itself.
 
 TODO
-	- adopt argparse to assign the output directory and possibly allow the model to take inputs from the user
 	- add preprocessing module for writing-systems other than Hangul
 	- modify the `tester.py` as it is made for the previous model of this repository
 	- modify the `plotter.py`
