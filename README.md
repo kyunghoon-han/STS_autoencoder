@@ -15,9 +15,9 @@ I am trying to keep the model as small as possible as I expect this model to be 
 
 TODO
 	- adopt argparse to assign the output directory and possibly allow the model to take inputs from the user
-	- modify the hard-coded parts of the network
-	- implement RNN somewhere (possibly in the encoder)
 	- add preprocessing module for writing-systems other than Hangul
+	- modify the `tester.py` as it is made for the previous model of this repository
+	- modify the `plotter.py`
 
 ## Preprocessing unit
 I tried to design the module so that the preprocessing unit is essentially separated from the main training model. The subfolder `preprocessing_unit` contains the following two files:

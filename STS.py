@@ -1,8 +1,9 @@
-from utils import Decoder,Latent,Criterion,Opt,Schedule,Encoder_Conv, TEncoder,TDecoder, TLatent
 import numpy as np
+from utils import Decoder,Latent,Criterion,Opt,Schedule,Encoder_Conv, TEncoder,TDecoder, TLatent
 import librosa, torch, os, csv, pickle, shutil, random
 from tqdm import tqdm
 from sklearn.preprocessing import StandardScaler
+
 
 # device
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -24,19 +25,19 @@ def open_list_pairs(path=path_list_pairs):
     return list_out
 
 #====================================
-# Hyperparameters 
-batch_size = 64
-epochs = 1000
-num_test = 100
-lr_stt = 0.01
-lr_tts = 0.0001
-step_lrtts = 20
-step_lrstt = 10
-STS_threshold = 10
-verbose = 5
+# Hyperparameters
+#batch_size = 64
+#epochs = 1000
+#num_test = 100
+#lr_stt = 0.01
+#lr_tts = 0.0001
+#step_lrtts = 20
+#step_lrstt = 10
+#STS_threshold = 10
+#verbose = 5
 # ===================================
 
-def batch_split(lst,batch_size=batch_size, is_txt=False, dict_val=None):
+def batch_split(lst,batch_size, is_txt=False, dict_val=None):
     # this splits the list_data above in batches
     # note that this function takes a list as an input
     list_tmp = [lst[i:i+batch_size] for i in range(0, len(lst), batch_size)]
@@ -70,10 +71,10 @@ def data_details(train_stuff,data_dir=data_dir):
         txt_target = np.load(path_txt)['arr_0'].tolist()
         wav_source = np.load(path_wav)['arr_0'].tolist()
         # split the data into batches
-        txt_target = torch.FloatTensor(batch_split(txt_target,
+        txt_target = torch.FloatTensor(batch_split(txt_target,batch_size,
                                 is_txt=True,
                                 dict_val=dict_txt)).to(device)
-        wav_source = torch.FloatTensor(batch_split(wav_source)).to(device)
+        wav_source = torch.FloatTensor(batch_split(wav_source,batch_size)).to(device)
         # discard the long sources
         if wav_source.size()[0] != txt_target.size()[0]:
             step -= 1
@@ -95,7 +96,42 @@ def text_pruner(text,leng_threshold):
 #    Trainer
 #
 #=====================================
-def trainer():
+def trainer(batch_size=64, epochs=1000,num_test=100,
+            lr_stt = 0.01, lr_tts=0.0001, step_lrtts=20,
+            step_lrstt=10, STS_threshold = 10, verbose = 5,
+            data_dir = "./preprocessing_unit/preprocessed",
+            encoded_txt_pkl = 'encoded_hangul.pkl',
+            log_dir="./logs", log_filename="logs.csv",
+            model_save_dir="./models",device='cuda',device_auto=True):
+    '''
+        input information:
+            batch_size      : number of batches
+            epochs
+            num_test        : number of test data
+            lr_stt          : learning rate of STT parts of the model
+            lr_tts          : learning rate of TTS parts of the model
+            step_lrtts      : scheduler step size for the TTS parts
+            step_lrstt      : scheduler step size for the STT parts
+            STS_threshold   : the epoch to start combining TTS and STT parts to
+                              STS and TTT models
+            vebose          : verbosity of the model
+            data_dir        : directory where the preprocessed data are stored 
+                              (file formats: .npz or .npy)
+            encoded_txt_pkl : a pickle file with text-to-one-hot dictionary
+            log_dir         : directory to store the log file
+            log_filename    : name of the log file
+            model_save_dir  : directory to store the models
+            device          : the device name where the NNs will be run on
+            device_auto     : this is true if the user want the program to find 
+                              the device to run the program on
+    '''
+    # set device if device_auto=True
+    if device_auto:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    else:
+        device = device # just a filler to not confuse myself
+    dict_txt_encoder = os.path.join(data_dir.replace("preprocessed",""), encoded_txt_pkl)
+    path_list_pairs = os.path.join(data_dir.replace("preprocessed",""), 'filelist_pairs.csv')
     # first we have to call the data in
     list_stuff = open_list_pairs()
     test_stuff = list_stuff[-100:]
@@ -143,12 +179,12 @@ def trainer():
     # source audio
     wav_source = np.load(path_wav)['arr_0'].tolist()
     txt_target = torch.FloatTensor(batch_split(txt_target,
-                                    is_txt=True,
+                                    batch_size,is_txt=True,
                                     dict_val=dict_txt)).to(device)
     # modification of the length_txt
     length_txt = int(length_txt/(txt_target.size()[-1] * batch_size))
     txt_target = text_pruner(txt_target,length_txt) # prune the input
-    wav_source = torch.FloatTensor(batch_split(wav_source)).to(device) 
+    wav_source = torch.FloatTensor(batch_split(wav_source,batch_size)).to(device) 
     output_size = wav_source.size()[-1]
     encoder = Encoder_Conv(device=device,input_dim=wav_source.size()[-1]) # encoder module
     text_encoder = TEncoder(device=device) # text encoder module
@@ -205,12 +241,12 @@ def trainer():
 
             # split the data into batches
             tmp = batch_split(txt_target,
-                    is_txt=True,
+                    batch_size,is_txt=True,
                     dict_val=dict_txt)
             tmp = text_pruner(tmp,length_txt)
 
             txt_target = torch.FloatTensor(tmp).to(device)
-            wav_source = torch.FloatTensor(batch_split(wav_source)).to(device)
+            wav_source = torch.FloatTensor(batch_split(wav_source,batch_size)).to(device)
 
             if e > STS_threshold:
                 switch = True
@@ -356,14 +392,14 @@ def trainer():
             wav_source = librosa.util.normalize(wav_source)
             #wav_source = std_wav.transform(wav_source)
             # split the data into batches
-            tmp = batch_split(txt_target,
+            tmp = batch_split(txt_target,batch_size,
                     is_txt=True,
                     dict_val=dict_txt)
             
             txt_target = torch.FloatTensor(tmp).to(device)
             txt_target = text_pruner(txt_target,length_txt)
             
-            wav_source = torch.FloatTensor(batch_split(wav_source)).to(device)
+            wav_source = torch.FloatTensor(batch_split(wav_source,batch_size)).to(device)
             
             # obtain the outputs
             encoded_wav = encoder(wav_source)
